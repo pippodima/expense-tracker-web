@@ -308,5 +308,16 @@ Shipped:
   multi-line entries); `.gitignore` now also excludes `test.txt`/`*.paste.txt` so pasted
   statements and generated sync files never get committed.
 
+### Chapter 9 — Make imported history visible + bulk categorize (2026-07-23)
+Goal: after importing months-old history, Home/Stats looked empty (they default to the
+current month; Activity has no date filter, so only it showed the data). Clarified this
+isn't a category problem — the Net/Income/Expense tiles don't depend on categories.
+Shipped:
+- On bank-sync import, the app now **jumps Home to the latest imported month** and sets
+  **Stats to "All"**, so the data is visible immediately instead of hidden behind the
+  current-month filter. (Re-importing the same file re-triggers the jump.)
+- **"Apply existing rules to all"** button in the review queue: re-runs the rules over every
+  uncategorized transaction in one tap (for after you've added rules in Settings).
+
 <!-- When we finish new work, add the next "Chapter N — title (date)" entry here, and update
      the "Current state" / "Roadmap" sections above to match. -->

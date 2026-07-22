@@ -1717,6 +1717,17 @@
     if (toPut.length) await DB.bulkPut('transactions', toPut);
     await bumpChanges(added + updated);
 
+    // Focus the views on the imported data — otherwise Home/Stats sit on the
+    // current month and look empty when the history is in other months.
+    const dates = data.transactions.map((t) => t.date).filter(Boolean).sort();
+    if (dates.length) {
+      const [ly, lm] = dates[dates.length - 1].split('-').map(Number);
+      ui.period = { type: 'month', y: ly, m0: lm - 1 };
+      ui.donutSel = null;
+      ui.stats.range = 'all';
+      ui.stats.donutSel = null;
+    }
+
     openSheet('Bank sync imported', (body, api) => {
       body.append(el('div', { class: 'import-summary card', html:
         `<span class="ok">${added} new transactions</span><br>` +
@@ -1738,6 +1749,17 @@
 
   const reviewQueue = () => DB.state.transactions.filter((t) => t.needsReview);
 
+  /** Re-run the rules over everything still in the review queue. Returns count matched. */
+  async function applyRulesToUncategorized() {
+    const upd = [];
+    for (const t of reviewQueue()) {
+      const cat = DB.suggestCategory(t.note || '');
+      if (cat) { const o = { ...t, categoryId: cat.id }; delete o.needsReview; upd.push(o); }
+    }
+    if (upd.length) { await DB.bulkPut('transactions', upd); await bumpChanges(upd.length); }
+    return upd.length;
+  }
+
   function openReviewSheet() {
     openSheet('Review imported', (body, api) => {
       const draw = () => {
@@ -1750,6 +1772,15 @@
         body.append(el('p', { class: 'muted', style: 'margin-bottom:10px;line-height:1.5', text:
           q.length + ' imported transaction' + (q.length === 1 ? '' : 's') +
           ' didn’t match any rule. Tap one to give it a category — and optionally teach a rule for next time.' }));
+        body.append(el('button', {
+          class: 'btn block small', style: 'margin-bottom:12px',
+          text: '⚡ Apply existing rules to all',
+          onclick: async () => {
+            const n = await applyRulesToUncategorized();
+            toast(n ? n + ' categorized by rules' : 'No rules matched these yet');
+            draw(); render();
+          }
+        }));
         q.forEach((t) => {
           body.append(el('button', { class: 'tx-row', onclick: () => openAssignSheet(t, draw) }, [
             el('span', { class: 'tx-icon', text: '❓', style: 'background:' + U.tintOf('blue') }),
