@@ -360,6 +360,36 @@
       ]));
     }
 
+    // Bank consent expiry (PSD2: dies after 90 days)
+    const consent = DB.state.meta.bankConsent;
+    if (consent && consent.expiresAt) {
+      const daysLeft = Math.floor((consent.expiresAt - Date.now()) / 86400000);
+      if (daysLeft < 0) {
+        root.append(el('div', { class: 'banner' }, [
+          el('span', { text: '🏦', style: 'font-size:1.3rem' }),
+          el('div', { class: 'b-main', html: '<strong>Bank link expired</strong>' +
+            'The 90-day consent has ended — run <code>bank_sync.py link</code> to reconnect.' })
+        ]));
+      } else if (daysLeft <= 7) {
+        root.append(el('div', { class: 'banner' }, [
+          el('span', { text: '🏦', style: 'font-size:1.3rem' }),
+          el('div', { class: 'b-main', html: '<strong>Bank link expiring</strong>' +
+            `Consent ends in ${daysLeft} day${daysLeft === 1 ? '' : 's'} — re-link with <code>bank_sync.py link</code> soon.` })
+        ]));
+      }
+    }
+
+    // Imported transactions waiting for a category
+    const pending = reviewQueue().length;
+    if (pending > 0) {
+      root.append(el('div', { class: 'banner' }, [
+        el('span', { text: '🏷', style: 'font-size:1.3rem' }),
+        el('div', { class: 'b-main', html: '<strong>' + pending + ' to categorize</strong>' +
+          'Imported transactions that didn’t match any rule.' }),
+        el('button', { class: 'btn small primary', text: 'Review', onclick: openReviewSheet })
+      ]));
+    }
+
     // Month / range navigation
     const nav = el('div', { class: 'month-nav' });
     const prev = el('button', { class: 'mn-btn', text: '‹', 'aria-label': 'Previous month' });
@@ -1012,6 +1042,7 @@
           if (!draft.categoryId) return toast('Pick a category');
           if (!draft.date) return toast('Pick a date');
           draft.amount = Math.round(val * 100) / 100;
+          delete draft.needsReview;   // manually edited = reviewed
           await DB.put('transactions', draft);
           await bumpChanges(1);
           api.close();
@@ -1227,6 +1258,32 @@
     }
     root.append(csvCard);
 
+    // Bank sync (GoCardless via the on-phone Python tool)
+    const consent2 = DB.state.meta.bankConsent;
+    const reviewN = reviewQueue().length;
+    const bankCard = el('div', { class: 'card' }, [
+      el('h2', { text: 'Bank sync (buddybank)' }),
+      el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:12px', text:
+        'Automatic import via GoCardless (free PSD2). The fetch runs on this phone in the free ' +
+        'a-Shell app — see sync/README.md — and produces a file you import here. ' +
+        'Duplicates are impossible: every bank transaction has a stable ID and re-imports are merged.' }),
+      el('button', { class: 'btn block primary', text: '🏦 Import bank sync file', onclick: importBankSync })
+    ]);
+    if (consent2 && consent2.expiresAt) {
+      const daysLeft = Math.floor((consent2.expiresAt - Date.now()) / 86400000);
+      bankCard.append(el('p', { class: 'muted', style: 'margin-top:10px', text:
+        daysLeft < 0 ? '⚠️ Bank consent expired — re-link with bank_sync.py link.'
+          : 'Bank consent valid for ' + daysLeft + ' more day' + (daysLeft === 1 ? '' : 's') +
+            (daysLeft <= 7 ? ' — re-link soon.' : '.') }));
+    }
+    if (reviewN > 0) {
+      bankCard.append(
+        el('div', { class: 'spacer' }),
+        el('button', { class: 'btn block', text: '🏷 Review queue (' + reviewN + ')', onclick: openReviewSheet })
+      );
+    }
+    root.append(bankCard);
+
     // Categories
     const catCard = el('div', { class: 'card' }, [
       el('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px' }, [
@@ -1261,7 +1318,7 @@
       const cat = DB.category(r.categoryId);
       ruleCard.append(el('button', { class: 'set-row', onclick: () => openRuleSheet(r) }, [
         el('span', { class: 's-main' }, [
-          el('div', { text: '“' + r.keyword + '”' }),
+          el('div', { text: '“' + r.keyword + '”' + (r.regex ? '  ·  regex' : '') }),
           el('div', { class: 's-sub', text: '→ ' + (cat ? cat.icon + ' ' + cat.name : '?') })
         ]),
         el('span', { class: 's-chev', text: '›' })
@@ -1371,17 +1428,25 @@
         type: 'text', placeholder: 'e.g. ESSELUNGA', value: draft.keyword,
         autocapitalize: 'characters'
       });
+      const rx = el('input', { type: 'checkbox' });
+      rx.checked = !!draft.regex;
       const cat = el('select', {}, DB.state.categories.map((c) =>
         el('option', { value: c.id, text: c.icon + ' ' + c.name })));
       if (draft.categoryId) cat.value = draft.categoryId;
       body.append(
         el('div', { class: 'field' }, [el('label', { text: 'If the note contains…' }), kw]),
+        el('label', { style: 'display:flex;gap:8px;align-items:center;font-size:0.85rem;margin-bottom:14px' },
+          [rx, el('span', { text: 'Treat as regular expression (e.g. ^POS.*MILANO)' })]),
         el('div', { class: 'field' }, [el('label', { text: 'Suggest category' }), cat]),
         el('button', {
           class: 'btn block primary', text: existing ? 'Save changes' : 'Add rule',
           onclick: async () => {
             if (!kw.value.trim()) return toast('Enter a keyword');
+            if (rx.checked) {
+              try { new RegExp(kw.value.trim()); } catch { return toast('Invalid regular expression'); }
+            }
             draft.keyword = kw.value.trim();
+            draft.regex = rx.checked || undefined;
             draft.categoryId = cat.value;
             await DB.put('rules', draft);
             api.close(); render();
@@ -1543,16 +1608,252 @@
     return card;
   }
 
+  /* ======================= Bank sync (GoCardless file import) ======================= */
+
+  async function ensureCategory(name, icon, color) {
+    let cat = DB.state.categories.find((c) => c.name.toLowerCase() === name.toLowerCase());
+    if (!cat) {
+      cat = { id: null, name, icon, color: color || 'blue' };
+      await DB.put('categories', cat);
+    }
+    return cat;
+  }
+
+  function importBankSync() {
+    pickFile('.json,application/json', async (text) => {
+      let data;
+      try { data = JSON.parse(text); } catch { return toast('Not a valid JSON file'); }
+      if (!data || data.kind !== 'bank-sync' || !Array.isArray(data.transactions)) {
+        return toast('Not a bank sync file — create one with sync/bank_sync.py');
+      }
+      // Remember consent expiry so the app can warn before the 90 days run out.
+      if (data.agreement && data.agreement.expiresAt) {
+        await DB.setMeta('bankConsent', {
+          institutionId: data.institutionId || '',
+          createdAt: data.agreement.createdAt || Date.now(),
+          expiresAt: data.agreement.expiresAt
+        });
+      }
+      const uuids = [...new Set(data.transactions.map((t) => t.accountUuid).filter(Boolean))];
+      const map = Object.assign({}, DB.state.meta.bankAccountMap || {});
+      const unmapped = uuids.filter((u) => !map[u] || !DB.account(map[u]));
+      if (unmapped.length) return openBankMapSheet(unmapped, data, map);
+      await applyBankSync(data, map);
+    });
+  }
+
+  /** First import from a new bank account: ask which app account it belongs to. */
+  function openBankMapSheet(unmapped, data, map) {
+    openSheet('Match bank accounts', (body, api) => {
+      body.append(el('p', { class: 'muted', style: 'margin-bottom:12px;line-height:1.5', text:
+        'Pick which account in this app each bank account belongs to. Saved once, reused on every sync.' }));
+      const selects = unmapped.map((uuid) => {
+        const info = (data.accounts || []).find((a) => a.uuid === uuid) || {};
+        const label = info.iban ? '…' + info.iban.slice(-6) : uuid.slice(0, 8) + '…';
+        const sel = el('select', {},
+          DB.state.accounts.map((a) => el('option', { value: a.id, text: acctIcon(a.type) + ' ' + a.name }))
+            .concat([el('option', { value: '__new', text: '➕ Create a new account' })]));
+        body.append(el('div', { class: 'field' }, [
+          el('label', { text: 'Bank account ' + label }), sel
+        ]));
+        return { uuid, sel, info };
+      });
+      body.append(el('button', {
+        class: 'btn block primary', text: 'Continue',
+        onclick: async () => {
+          for (const { uuid, sel, info } of selects) {
+            if (sel.value === '__new') {
+              const acct = await DB.put('accounts', {
+                id: null,
+                name: 'buddybank' + (info.iban ? ' …' + info.iban.slice(-4) : ''),
+                type: 'checking', startingBalance: 0
+              });
+              map[uuid] = acct.id;
+            } else {
+              map[uuid] = sel.value;
+            }
+          }
+          await DB.setMeta('bankAccountMap', map);
+          api.close();
+          await applyBankSync(data, map);
+        }
+      }));
+    });
+  }
+
+  /** Upsert by externalId (the app-side "unique index"): re-imports are idempotent. */
+  async function applyBankSync(data, map) {
+    const byExternal = new Map();
+    DB.state.transactions.forEach((t) => { if (t.externalId) byExternal.set(t.externalId, t); });
+    const uncat = await ensureCategory('Uncategorized', '❓');
+
+    let added = 0, updated = 0, unchanged = 0, skipped = 0, review = 0;
+    const toPut = [];
+    for (const r of data.transactions) {
+      const amount = Math.round(Math.abs(Number(r.amount)) * 100) / 100;
+      if (!r.externalId || !r.date || !isFinite(Number(r.amount)) || amount === 0 ||
+          !map[r.accountUuid]) { skipped++; continue; }
+      const type = Number(r.amount) < 0 ? 'expense' : 'income';
+      const existing = byExternal.get(r.externalId);
+      if (existing) {
+        // Bank data wins for date/amount/type; the user's category/note edits survive.
+        if (existing.date !== r.date || existing.amount !== amount || existing.type !== type) {
+          toPut.push({ ...existing, date: r.date, amount, type });
+          updated++;
+        } else unchanged++;
+        continue;
+      }
+      const cat = DB.suggestCategory(r.note || '');
+      if (!cat) review++;
+      const tx = {
+        id: null, externalId: r.externalId, date: r.date, amount, type,
+        categoryId: (cat || uncat).id, accountId: map[r.accountUuid], note: r.note || ''
+      };
+      if (!cat) tx.needsReview = true;
+      toPut.push(tx);
+      byExternal.set(r.externalId, tx);
+      added++;
+    }
+    if (toPut.length) await DB.bulkPut('transactions', toPut);
+    await bumpChanges(added + updated);
+
+    openSheet('Bank sync imported', (body, api) => {
+      body.append(el('div', { class: 'import-summary card', html:
+        `<span class="ok">${added} new transactions</span><br>` +
+        (updated ? `${updated} updated from the bank<br>` : '') +
+        `<span class="dup">${unchanged} already up to date</span><br>` +
+        (skipped ? `<span class="dup">${skipped} rows skipped (invalid)</span><br>` : '') +
+        (review ? `<strong>${review} need a category</strong> — they’re in the review queue` : 'All categorized by your rules ✓')
+      }));
+      if (review) {
+        body.append(el('button', {
+          class: 'btn block primary', text: '🏷 Review them now',
+          onclick: () => { api.close(); openReviewSheet(); }
+        }), el('div', { class: 'spacer' }));
+      }
+      body.append(el('button', { class: 'btn block', text: 'Done', onclick: () => { api.close(); render(); } }));
+    });
+    render();
+  }
+
+  const reviewQueue = () => DB.state.transactions.filter((t) => t.needsReview);
+
+  function openReviewSheet() {
+    openSheet('Review imported', (body, api) => {
+      const draw = () => {
+        body.innerHTML = '';
+        const q = reviewQueue().sort((a, b) => b.date.localeCompare(a.date));
+        if (!q.length) {
+          body.append(el('div', { class: 'empty', html: '<span class="big">✅</span>All caught up' }));
+          return;
+        }
+        body.append(el('p', { class: 'muted', style: 'margin-bottom:10px;line-height:1.5', text:
+          q.length + ' imported transaction' + (q.length === 1 ? '' : 's') +
+          ' didn’t match any rule. Tap one to give it a category — and optionally teach a rule for next time.' }));
+        q.forEach((t) => {
+          body.append(el('button', { class: 'tx-row', onclick: () => openAssignSheet(t, draw) }, [
+            el('span', { class: 'tx-icon', text: '❓', style: 'background:' + U.tintOf('blue') }),
+            el('span', { class: 'tx-main' }, [
+              el('span', { class: 'tx-title', text: t.note || 'Transaction' }),
+              el('span', { class: 'tx-sub', text: U.fmtDate(t.date) })
+            ]),
+            el('span', { class: 'tx-amt' + (t.type === 'income' ? ' pos' : ''),
+              text: (t.type === 'income' ? '+ ' : '− ') + fmtEUR(t.amount) })
+          ]));
+        });
+      };
+      draw();
+    });
+  }
+
+  function openAssignSheet(t, onDone) {
+    openSheet('Pick a category', (body, api) => {
+      let chosen = null;
+      const chips = el('div', { class: 'chips' });
+      const drawChips = () => {
+        chips.innerHTML = '';
+        DB.state.categories.forEach((c) => {
+          chips.append(el('button', {
+            class: 'chip' + (chosen === c.id ? ' active' : ''),
+            onclick: () => { chosen = c.id; drawChips(); }
+          }, [
+            el('span', { class: 'dot', style: 'background:' + U.colorOf(c.color) }),
+            el('span', { text: c.icon + ' ' + c.name })
+          ]));
+        });
+      };
+      drawChips();
+
+      // Suggest a rule pattern from the description's most distinctive word.
+      const guess = (t.note || '').split(/\s+/)
+        .filter((w) => w.length >= 4 && !/^\d+$/.test(w))[0] || (t.note || '').slice(0, 12);
+      const ruleToggle = el('input', { type: 'checkbox' });
+      ruleToggle.checked = !!guess;
+      const pattern = el('input', { type: 'text', value: guess.toUpperCase(), autocapitalize: 'characters' });
+      const regexToggle = el('input', { type: 'checkbox' });
+
+      body.append(
+        el('p', { style: 'font-weight:600;margin-bottom:2px', text: t.note || 'Transaction' }),
+        el('p', { class: 'muted', style: 'margin-bottom:12px', text:
+          U.fmtDate(t.date) + ' · ' + (t.type === 'income' ? '+' : '−') + fmtEUR(t.amount) }),
+        el('div', { class: 'field' }, [el('label', { text: 'Category' }), chips]),
+        el('hr', { class: 'sep' }),
+        el('label', { style: 'display:flex;gap:8px;align-items:center;font-size:0.85rem;margin-bottom:10px' },
+          [ruleToggle, el('span', { text: 'Also create a rule so this is automatic next time' })]),
+        el('div', { class: 'field' }, [el('label', { text: 'When the description contains…' }), pattern]),
+        el('label', { style: 'display:flex;gap:8px;align-items:center;font-size:0.85rem;margin-bottom:14px' },
+          [regexToggle, el('span', { text: 'Treat as regular expression' })]),
+        el('button', {
+          class: 'btn block primary', text: 'Assign',
+          onclick: async () => {
+            if (!chosen) return toast('Pick a category');
+            const upd = { ...t, categoryId: chosen };
+            delete upd.needsReview;
+            await DB.put('transactions', upd);
+            if (ruleToggle.checked && pattern.value.trim()) {
+              await DB.put('rules', {
+                id: null, keyword: pattern.value.trim(),
+                regex: regexToggle.checked || undefined, categoryId: chosen
+              });
+              // Let the new rule sweep the rest of the queue too.
+              let swept = 0;
+              for (const other of reviewQueue()) {
+                const cat = DB.suggestCategory(other.note || '');
+                if (cat) {
+                  const o = { ...other, categoryId: cat.id };
+                  delete o.needsReview;
+                  await DB.put('transactions', o);
+                  swept++;
+                }
+              }
+              if (swept) toast('Rule applied to ' + (swept + 1) + ' transactions');
+            }
+            await bumpChanges(1);
+            api.close();
+            onDone();
+          }
+        })
+      );
+    });
+  }
+
   /* ======================= Export / import ======================= */
 
   async function exportJSON() {
+    const m = DB.state.meta;
     const data = {
       app: 'expense-tracker', version: 1, exportedAt: new Date().toISOString(),
       accounts: DB.state.accounts,
       categories: DB.state.categories,
       transactions: DB.state.transactions,
       rules: DB.state.rules,
-      presets: DB.state.presets
+      presets: DB.state.presets,
+      meta: {
+        budget: m.budget || null,
+        backupReminder: m.backupReminder || null,
+        bankAccountMap: m.bankAccountMap || null,
+        bankConsent: m.bankConsent || null
+      }
     };
     U.download('expense-tracker-backup-' + U.todayISO() + '.json',
       JSON.stringify(data, null, 2), 'application/json');

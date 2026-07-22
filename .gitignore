@@ -8,3 +8,13 @@ node_modules/
 # Local backups exported from the app (never commit personal data)
 *expense-tracker-backup-*.json
 transactions-*.csv
+
+# Bank sync: credentials, tokens, link state, and fetched data stay local
+sync/.env
+sync/.tokens.json
+sync/state.json
+bank-sync-*.json
+
+# Python bytecode
+__pycache__/
+*.pyc

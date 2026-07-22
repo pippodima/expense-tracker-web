@@ -702,6 +702,12 @@ h2 { font-size: 1.05rem; }
 }
 .banner .b-main { flex: 1; }
 .banner strong { display: block; }
+.banner code {
+  font-size: 0.78em;
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
 
 /* Color / icon pickers */
 .swatches { display: flex; flex-wrap: wrap; gap: 10px; }

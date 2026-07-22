@@ -93,6 +93,18 @@ const DB = (() => {
     }
     // Baseline for the "it's been N days" backup reminder.
     if (!state.meta.installedAt) await setMeta('installedAt', Date.now());
+    // One-time: example regex rules for bank-import categorization.
+    if (!state.meta.regexRulesSeeded && state.categories.length) {
+      let software = state.categories.find((c) => /^software$/i.test(c.name));
+      if (!software) {
+        software = { id: U.uid(), name: 'Software', icon: '💻', color: 'violet' };
+        await put('categories', software);
+      }
+      if (!state.rules.some((r) => /anthropic/i.test(r.keyword || ''))) {
+        await put('rules', { id: U.uid(), keyword: 'ANTHROPIC', regex: true, categoryId: software.id });
+      }
+      await setMeta('regexRulesSeeded', 1);
+    }
     // Best effort: ask the browser not to evict our data.
     if (navigator.storage && navigator.storage.persist) {
       navigator.storage.persist().catch(() => {});
@@ -213,12 +225,20 @@ const DB = (() => {
   const category = (id) => state.categories.find((c) => c.id === id) || null;
   const account = (id) => state.accounts.find((a) => a.id === id) || null;
 
-  /** First keyword rule matching the text (case-insensitive substring). */
+  /** First rule matching the text. Rules are case-insensitive substrings by
+      default; rules with `regex: true` are tested as regular expressions. */
   function suggestCategory(text) {
     if (!text) return null;
     const up = text.toUpperCase();
     for (const r of state.rules) {
-      if (r.keyword && up.includes(r.keyword.toUpperCase())) {
+      if (!r.keyword) continue;
+      let hit = false;
+      if (r.regex) {
+        try { hit = new RegExp(r.keyword, 'i').test(text); } catch { hit = false; }
+      } else {
+        hit = up.includes(r.keyword.toUpperCase());
+      }
+      if (hit) {
         const cat = category(r.categoryId);
         if (cat) return cat;
       }

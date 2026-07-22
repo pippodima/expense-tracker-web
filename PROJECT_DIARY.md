@@ -31,12 +31,17 @@ where the user owns their data as files.
 
 ## Guiding constraints (the rules we don't break)
 
-1. No network calls of any kind. No third-party scripts, fonts, or CDNs.
+1. **The web app makes no network calls.** No third-party scripts, fonts, or CDNs. The one
+   allowed bridge to the outside world is the *separate* bank-sync script (`sync/`), which
+   the user runs explicitly — on the phone itself — and whose output enters the app only as
+   a user-imported file. No secrets ever live in the web app or the repo.
 2. No build tooling required — it must run as static files.
 3. Everything must degrade gracefully on iOS Safari (the primary target).
-4. Data durability is the user's, via easy JSON backups — because browser storage *can* be
+4. **Nothing may depend on a Mac/computer.** The whole workflow — including bank sync —
+   must be executable on the iPhone alone.
+5. Data durability is the user's, via easy JSON backups — because browser storage *can* be
    evicted by iOS. We nudge backups actively.
-5. Charts follow the bundled **dataviz** design method (validated colorblind-safe palette,
+6. Charts follow the bundled **dataviz** design method (validated colorblind-safe palette,
    surface gaps between marks, legends for multi-series, light/dark aware).
 
 ---
@@ -57,6 +62,8 @@ Static files, loaded in order by `index.html`:
 | `sw.js` | Service worker — precache app shell, cache-first, offline fallback |
 | `manifest.webmanifest` | PWA manifest (standalone, icons, `?action=add` shortcut) |
 | `icons/` | Generated € app icons (180 / 192 / 512) |
+| `sync/bank_sync.py` | **Bank sync tool** (not part of the served app's runtime): stdlib-only Python, runs on the iPhone in a-Shell/iSH; GoCardless PSD2 → `bank-sync-*.json` |
+| `sync/README.md`, `sync/.env.example` | Setup docs + config template; real `.env`, `state.json`, `.tokens.json` are gitignored |
 
 There is **no framework**. State lives in `DB.state` (the source of truth, mirrored to
 IndexedDB) plus a small `ui` object in `app.js` for view/filter state. The service worker
@@ -124,6 +131,22 @@ threshold, live status, preview). Plus a "delete all data" action with double co
 transaction. Settings explains the two setup paths clearly: **Home Screen** (add the link to
 the Home Screen directly — no Shortcut) and **Lock Screen** (a one-time Shortcut wrapping the
 link, since the Lock Screen only accepts widgets).
+
+**Bank sync (buddybank / UniCredit via GoCardless, phone-only):** `sync/bank_sync.py` runs
+**on the iPhone** in the free a-Shell (or iSH) terminal app — no Mac, no server. Commands:
+`link` (90-day PSD2 consent flow: agreement → requisition → bank auth URL → account UUIDs
+stored locally), `sync [--dry-run] [--force]` (fetch booked transactions → signed-amount
+mapping → `bank-sync-YYYY-MM-DD.json`), `status`. It caches the 24h access token, renews via
+the 30-day refresh token, enforces the free tier's 4-calls/account/day limit (6h minimum
+between syncs), skips pending transactions (unstable IDs), and detects the expired-consent
+API error with a clear "re-link" message. The app imports the file (Settings → Bank sync):
+first import asks to map bank-account UUIDs to app accounts (saved for reuse), then it
+**upserts by `externalId`** — re-imports are idempotent, manual entries (no externalId)
+untouched, bank corrections update date/amount/type while preserving the user's category.
+Unmatched descriptions land in **Uncategorized** and a **review queue** (Home banner +
+Settings), where assigning a category can also create a rule (substring or **regex**) that
+immediately sweeps the rest of the queue. Consent expiry is mirrored in-app with warnings
+from 7 days out. Rules now support regex patterns (seeded example: `ANTHROPIC` → Software).
 
 ---
 
@@ -247,6 +270,31 @@ Shipped:
   exported personal backup/CSV files so real data never gets committed).
 - Created **this document** as the project's description, storyboard, and running log — to be
   updated as we reach each new goal.
+
+### Chapter 7 — Automatic bank import, phone-only (2026-07-23)
+Goal: automatic import of buddybank (UniCredit) transactions via GoCardless Bank Account
+Data (free PSD2 tier) — with the added requirement, arriving mid-build, that **nothing may
+depend on a Mac**: the whole flow must run on the iPhone.
+Key findings that shaped the design:
+- GoCardless **blocks browser CORS** (verified empirically: no `Access-Control-Allow-Origin`
+  on preflight or response) → the PWA cannot call the API directly, ever.
+- Secrets can't ship in a public static site → they live in a gitignored `.env` next to the
+  script, never in app code.
+- A Node CLI was built first, then **replaced with stdlib-only Python** so the tool runs
+  on-device in the free a-Shell/iSH terminal apps → the Mac dependency disappeared.
+Shipped:
+- `sync/bank_sync.py` — link / sync / status, `--dry-run`, `--force`; token cache + refresh;
+  4-calls/day rate-limit guard; pending-transaction skip; expired-consent (EUA) detection;
+  sandbox-first config (`SANDBOXFINANCE_SFIN0000`) switchable to the real bank via `.env`.
+- App-side import with account-UUID → app-account mapping (saved), **upsert by
+  `externalId`** (idempotent re-imports; manual entries untouched; category edits preserved).
+- **Regex-capable rules** (backwards-compatible with keyword rules; validated in the editor;
+  seeded `ANTHROPIC` → Software) and a **review queue** for unmatched imports where assigning
+  a category can teach a new rule that sweeps the remaining queue.
+- **Consent-expiry warnings** in-app (7 days out and after expiry) fed by the sync file's
+  agreement metadata; JSON backups now also carry budget/bank/reminder settings.
+- Tests: Python mapping vs real API shapes (5/5), consent-error detection (4/4), upsert
+  simulation (6/6) — plus syntax checks on everything.
 
 <!-- When we finish new work, add the next "Chapter N — title (date)" entry here, and update
      the "Current state" / "Roadmap" sections above to match. -->
