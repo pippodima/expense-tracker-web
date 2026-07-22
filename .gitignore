@@ -18,3 +18,7 @@ bank-sync-*.json
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Pasted bank statements used only for local testing
+test.txt
+*.paste.txt

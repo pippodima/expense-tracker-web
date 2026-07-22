@@ -296,5 +296,17 @@ Shipped:
 - Tests: Python mapping vs real API shapes (5/5), consent-error detection (4/4), upsert
   simulation (6/6) — plus syntax checks on everything.
 
+### Chapter 8 — Paste-to-import + safe testing (2026-07-23)
+Goal: try the app with a real-looking history without any bank/API, and answer "can a
+notification auto-update the app?" (no — serverless/offline; data only enters via import).
+Shipped:
+- `sync/paste_to_sync.py` — converts a copy-pasted buddybank statement (merchant / payment
+  type / amount lines under Italian date headers) into a `bank-sync-*.json` the app imports
+  through the normal Bank sync path (mapping, upsert-by-externalId, rules, review queue).
+  A genuine no-GoCardless way to load history. Same-day duplicates get stable unique ids.
+- Verified on a 119-transaction sample (handles `1.234,56`-style thousands, `+`/`-` signs,
+  multi-line entries); `.gitignore` now also excludes `test.txt`/`*.paste.txt` so pasted
+  statements and generated sync files never get committed.
+
 <!-- When we finish new work, add the next "Chapter N — title (date)" entry here, and update
      the "Current state" / "Roadmap" sections above to match. -->
