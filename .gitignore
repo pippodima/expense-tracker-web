@@ -1,0 +1,10 @@
+# macOS
+.DS_Store
+
+# Logs / temp
+*.log
+node_modules/
+
+# Local backups exported from the app (never commit personal data)
+*expense-tracker-backup-*.json
+transactions-*.csv
