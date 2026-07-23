@@ -1449,7 +1449,9 @@
             draft.regex = rx.checked || undefined;
             draft.categoryId = cat.value;
             await DB.put('rules', draft);
-            api.close(); render();
+            api.close();
+            await offerApplyRuleToPast(draft);
+            render();
           }
         })
       );
@@ -1748,6 +1750,31 @@
   }
 
   const reviewQueue = () => DB.state.transactions.filter((t) => t.needsReview);
+
+  function ruleMatches(text, rule) {
+    if (!text || !rule.keyword) return false;
+    if (rule.regex) {
+      try { return new RegExp(rule.keyword, 'i').test(text); } catch { return false; }
+    }
+    return text.toUpperCase().includes(rule.keyword.toUpperCase());
+  }
+
+  /** After saving a rule, offer to retroactively apply it to matching past transactions. */
+  async function offerApplyRuleToPast(rule) {
+    const matches = DB.state.transactions.filter(
+      (t) => t.categoryId !== rule.categoryId && ruleMatches(t.note || '', rule));
+    if (!matches.length) return;
+    const cat = DB.category(rule.categoryId);
+    const ok = await confirmSheet(
+      `Apply this rule to ${matches.length} past transaction${matches.length === 1 ? '' : 's'}? ` +
+      `They’ll be set to ${cat ? cat.icon + ' ' + cat.name : 'this category'}.`,
+      'Apply to past', false);
+    if (!ok) return;
+    const upd = matches.map((t) => { const o = { ...t, categoryId: rule.categoryId }; delete o.needsReview; return o; });
+    await DB.bulkPut('transactions', upd);
+    await bumpChanges(upd.length);
+    toast(upd.length + ' transaction' + (upd.length === 1 ? '' : 's') + ' updated');
+  }
 
   /** Re-run the rules over everything still in the review queue. Returns count matched. */
   async function applyRulesToUncategorized() {

@@ -319,5 +319,19 @@ Shipped:
 - **"Apply existing rules to all"** button in the review queue: re-runs the rules over every
   uncategorized transaction in one tap (for after you've added rules in Settings).
 
+### Chapter 10 — Starter rules + retroactive rule apply (2026-07-23)
+Goal: seed categorization rules for the user's common merchants, and answer "does changing a
+rule affect past transactions?" (previously no — rules only hit imports and the review queue).
+Shipped:
+- One-time `starterRulesSeeded` migration: adds a **University food** category and ~30 keyword
+  rules (MENSA/CIR/ITACA → University food, CAMINITOS/PIZZERIA/SUMUP → Dining, UNICOOP/PAM →
+  Groceries, AUTOLINEE/FLIX/ITABUS → Transport, ILIAD/APPLE.COM → Bills, MICROSOFT/CLAUDE →
+  Software, PHARMACIE/SERENIS → Health, …). Ordered so university-specific rules beat the
+  generic "BAR". Simulated coverage on the 119-tx sample: **87 auto-categorized (73%)**.
+- **Retroactive rule apply**: saving or editing a rule now offers to apply it to matching
+  *past* transactions (confirm dialog, shows the count and target category). So a rule change
+  can update history — answering the user's question with a real capability. `bumpChanges`
+  keeps the backup reminder honest.
+
 <!-- When we finish new work, add the next "Chapter N — title (date)" entry here, and update
      the "Current state" / "Roadmap" sections above to match. -->

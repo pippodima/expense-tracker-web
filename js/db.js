@@ -105,6 +105,42 @@ const DB = (() => {
       }
       await setMeta('regexRulesSeeded', 1);
     }
+    // One-time: starter keyword rules for common Italian/buddybank merchants.
+    if (!state.meta.starterRulesSeeded && state.categories.length) {
+      const ensureCat = async (name, icon, color) => {
+        let c = state.categories.find((x) => x.name.toLowerCase() === name.toLowerCase());
+        if (!c) c = await put('categories', { id: U.uid(), name, icon, color });
+        return c;
+      };
+      const uni = await ensureCat('University food', '🍝', 'yellow');
+      const dining = await ensureCat('Dining', '🍕', 'orange');
+      const groceries = await ensureCat('Groceries', '🛒', 'green');
+      const transport = await ensureCat('Transport', '🚌', 'blue');
+      const bills = await ensureCat('Bills', '💡', 'yellow');
+      const software2 = await ensureCat('Software', '💻', 'violet');
+      const health = await ensureCat('Health', '💊', 'red');
+      const shopping = await ensureCat('Shopping', '🛍️', 'magenta');
+      const entertainment = await ensureCat('Entertainment', '🎬', 'violet');
+      // Order matters: earlier rules win, so university-specific before generic "BAR".
+      const starter = [
+        ['MENSA', uni], ['CIR UNIV', uni], ['ITACA', uni], ['FACOLTA', uni],
+        ['CAPONNETTO', uni], ['CALAMANDREI', uni], ['S.APOLLONIA', uni],
+        ['CAMINITOS', dining], ['SUMUP', dining], ['PIZZERIA', dining], ['OSTERIA', dining],
+        ['RIFRULLO', dining], ['HABANA', dining], ['NINKASI', dining], ['BAR', dining],
+        ['UNICOOP', groceries], ['PAM', groceries],
+        ['AUTOLINEE', transport], ['FLIX', transport], ['ITABUS', transport], ['TCL', transport],
+        ['ILIAD', bills], ['APPLE.COM', bills], ['COMUNE DI FIRENZE', bills],
+        ['MICROSOFT', software2], ['CLAUDE', software2],
+        ['PHARMACIE', health], ['PIODA IMAGING', health], ['SERENIS', health],
+        ['INTIMISSIMI', shopping], ['YURPLAN', entertainment]
+      ];
+      for (const [keyword, cat] of starter) {
+        if (!state.rules.some((r) => (r.keyword || '').toUpperCase() === keyword.toUpperCase())) {
+          await put('rules', { id: U.uid(), keyword, categoryId: cat.id });
+        }
+      }
+      await setMeta('starterRulesSeeded', 1);
+    }
     // Best effort: ask the browser not to evict our data.
     if (navigator.storage && navigator.storage.persist) {
       navigator.storage.persist().catch(() => {});
