@@ -390,5 +390,15 @@ Shipped:
   importer** instead of storing raw rows; refactored the bank-sync handler so both entry points
   share it.
 
+### Chapter 14 — Tappable Top-spending rows → filtered list / review (2026-07-26)
+Goal: make Home's Top-spending categories actionable.
+Shipped:
+- Each Top-spending row is now a button. Tapping a normal category opens the **Activity list
+  filtered to that category for the current period**, where the existing sort control reorders
+  by date/amount/etc. Tapping **Uncategorized** opens the **review queue** (same as the Home
+  Review button), so it's reachable from the Top-spending list too.
+- `reviewQueue()` broadened to include any transaction in the Uncategorized category (not only
+  `needsReview`), so the review section and its count cover everything uncategorized.
+
 <!-- When we finish new work, add the next "Chapter N — title (date)" entry here, and update
      the "Current state" / "Roadmap" sections above to match. -->

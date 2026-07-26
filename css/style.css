@@ -524,8 +524,18 @@ h2 { font-size: 1.05rem; }
 .budget-tomorrow .tom-hint.pos { color: var(--good); }
 .budget-tomorrow .tom-hint.neg { color: var(--bad); }
 
-/* Top-spending compact bars (Home) */
-.catbar { display: flex; align-items: center; gap: 12px; padding: 7px 0; }
+/* Top-spending compact bars (Home) — tappable rows */
+.catbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 4px;
+  width: 100%;
+  text-align: left;
+  border-radius: 10px;
+}
+.catbar:active { background: var(--surface-2); }
+.catbar-chev { color: var(--muted); font-size: 1.1rem; flex: 0 0 auto; }
 .catbar-icon {
   width: 34px; height: 34px;
   border-radius: 50%;

@@ -446,7 +446,7 @@
       const maxV = items[0].value;
       items.forEach(({ cat, value }) => {
         const color = U.colorOf(cat ? cat.color : 'blue');
-        catCard.append(el('div', { class: 'catbar' }, [
+        catCard.append(el('button', { class: 'catbar', onclick: () => openCategoryTransactions(cat) }, [
           el('span', { class: 'catbar-icon', text: cat ? cat.icon : '❓',
             style: 'background:' + U.tintOf(cat ? cat.color : 'blue') }),
           el('div', { class: 'catbar-main' }, [
@@ -458,11 +458,31 @@
               el('div', { class: 'catbar-fill',
                 style: 'width:' + (maxV > 0 ? (value / maxV) * 100 : 0) + '%;background:' + color })
             ])
-          ])
+          ]),
+          el('span', { class: 'catbar-chev', text: '›' })
         ]));
       });
     }
     root.append(catCard);
+  }
+
+  const uncategorizedCat = () =>
+    DB.state.categories.find((c) => c.name.toLowerCase() === 'uncategorized') || null;
+
+  /** Tap a Top-spending row: Uncategorized opens the review queue; any other
+      category opens the Activity list filtered to it for the current period,
+      where it can be re-sorted by date/amount. */
+  function openCategoryTransactions(cat) {
+    const uc = uncategorizedCat();
+    if (cat && uc && cat.id === uc.id) { openReviewSheet(); return; }
+    const r = periodRange();
+    ui.tx.q = '';
+    ui.tx.accountId = '';
+    ui.tx.categoryId = cat ? cat.id : '';
+    ui.tx.from = r.from;
+    ui.tx.to = r.to;
+    ui.tx.limit = 100;
+    show('transactions');
   }
 
   function shiftMonth(delta) {
@@ -1845,7 +1865,10 @@
     render();
   }
 
-  const reviewQueue = () => DB.state.transactions.filter((t) => t.needsReview);
+  const reviewQueue = () => {
+    const uc = uncategorizedCat();
+    return DB.state.transactions.filter((t) => t.needsReview || (uc && t.categoryId === uc.id));
+  };
 
   function ruleMatches(text, rule) {
     if (!text || !rule.keyword) return false;
