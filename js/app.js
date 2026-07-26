@@ -1683,13 +1683,24 @@
     });
   }
 
-  /** Upsert by externalId (the app-side "unique index"): re-imports are idempotent. */
+  /** Upsert by externalId (the app-side "unique index"): re-imports are idempotent.
+      Rows with no externalId match are also reconciled against existing manual/CSV
+      transactions (same date + amount) so a bank sync merges with — instead of
+      duplicating — a purchase you already logged by hand. */
   async function applyBankSync(data, map) {
     const byExternal = new Map();
-    DB.state.transactions.forEach((t) => { if (t.externalId) byExternal.set(t.externalId, t); });
+    // Manual/CSV transactions (no externalId) indexed by date+signed-amount for adoption.
+    const adoptable = new Map();
+    DB.state.transactions.forEach((t) => {
+      if (t.externalId) { byExternal.set(t.externalId, t); return; }
+      const signed = t.type === 'income' ? t.amount : -t.amount;
+      const k = t.date + '|' + signed.toFixed(2);
+      if (!adoptable.has(k)) adoptable.set(k, []);
+      adoptable.get(k).push(t);
+    });
     const uncat = await ensureCategory('Uncategorized', '❓');
 
-    let added = 0, updated = 0, unchanged = 0, skipped = 0, review = 0;
+    let added = 0, updated = 0, unchanged = 0, skipped = 0, review = 0, merged = 0;
     const toPut = [];
     for (const r of data.transactions) {
       const amount = Math.round(Math.abs(Number(r.amount)) * 100) / 100;
@@ -1705,6 +1716,17 @@
         } else unchanged++;
         continue;
       }
+      // No externalId match — adopt a matching hand-entered transaction if there is one.
+      const signedR = type === 'expense' ? -amount : amount;
+      const bucket = adoptable.get(r.date + '|' + signedR.toFixed(2));
+      if (bucket && bucket.length) {
+        const adopt = bucket.shift();
+        // Keep the user's category/note/account; attach the bank id so future syncs update it.
+        toPut.push({ ...adopt, externalId: r.externalId });
+        byExternal.set(r.externalId, adopt);
+        merged++;
+        continue;
+      }
       const cat = DB.suggestCategory(r.note || '');
       if (!cat) review++;
       const tx = {
@@ -1717,7 +1739,7 @@
       added++;
     }
     if (toPut.length) await DB.bulkPut('transactions', toPut);
-    await bumpChanges(added + updated);
+    await bumpChanges(added + updated + merged);
 
     // Focus the views on the imported data — otherwise Home/Stats sit on the
     // current month and look empty when the history is in other months.
@@ -1733,6 +1755,7 @@
     openSheet('Bank sync imported', (body, api) => {
       body.append(el('div', { class: 'import-summary card', html:
         `<span class="ok">${added} new transactions</span><br>` +
+        (merged ? `<span class="ok">${merged} merged with entries you already had</span><br>` : '') +
         (updated ? `${updated} updated from the bank<br>` : '') +
         `<span class="dup">${unchanged} already up to date</span><br>` +
         (skipped ? `<span class="dup">${skipped} rows skipped (invalid)</span><br>` : '') +
@@ -1929,17 +1952,115 @@
       if (!data || !Array.isArray(data.transactions) || !Array.isArray(data.accounts)) {
         return toast('Not an Expense Tracker backup');
       }
-      const ok = await confirmSheet(
-        `Replace everything on this device with the backup (${data.transactions.length} transactions, ` +
-        `${data.accounts.length} accounts)?`, 'Replace all data', true);
-      if (!ok) return;
-      await DB.replaceAll(data);
-      // Restored state matches the file on disk, so nothing is unsaved yet.
-      await DB.setMeta('changesSinceBackup', 0);
-      await DB.setMeta('installedAt', Date.now());
-      toast('Backup restored');
-      render();
+      openSheet('Import backup', (body, api) => {
+        body.append(
+          el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:14px', text:
+            `This file has ${data.transactions.length} transactions and ${data.accounts.length} accounts. ` +
+            'Combine it with what’s already on this device, or replace everything?' }),
+          el('button', {
+            class: 'btn block primary', text: '➕ Merge with current data',
+            onclick: async () => {
+              api.close();
+              const res = await mergeBackup(data);
+              openSheet('Backup merged', (b2, a2) => {
+                b2.append(el('div', { class: 'import-summary card', html:
+                  `<span class="ok">${res.added} new transactions added</span><br>` +
+                  `<span class="dup">${res.skipped} already present (skipped)</span><br>` +
+                  (res.newCats ? `${res.newCats} new categories<br>` : '') +
+                  (res.newAccts ? `${res.newAccts} new accounts<br>` : '') +
+                  (res.newRules ? `${res.newRules} new rules` : 'No new rules')
+                }),
+                el('button', { class: 'btn block', text: 'Done', onclick: () => { a2.close(); render(); } }));
+              });
+              render();
+            }
+          }),
+          el('p', { class: 'muted', style: 'text-align:center;margin:10px 0;font-size:0.8rem', text:
+            'Merge keeps both sets, matches categories & accounts by name, and skips duplicate transactions.' }),
+          el('hr', { class: 'sep' }),
+          el('button', {
+            class: 'btn block danger', text: '♻︎ Replace everything',
+            onclick: async () => {
+              api.close();
+              if (!(await confirmSheet(
+                'Replace ALL data on this device with the backup? Your current data here is lost.',
+                'Replace all data', true))) return;
+              await DB.replaceAll(data);
+              await DB.setMeta('changesSinceBackup', 0);
+              await DB.setMeta('installedAt', Date.now());
+              toast('Backup restored'); render();
+            }
+          })
+        );
+      });
     });
+  }
+
+  /** Combine a backup into the current data: categories/accounts matched by name,
+      rules deduped, transactions deduped by externalId then date+amount+description. */
+  async function mergeBackup(data) {
+    const catRemap = new Map();
+    const acctRemap = new Map();
+    let newCats = 0, newAccts = 0, newRules = 0;
+
+    for (const c of (data.categories || [])) {
+      const hit = DB.state.categories.find((x) => x.name.toLowerCase() === (c.name || '').toLowerCase());
+      if (hit) { catRemap.set(c.id, hit.id); continue; }
+      const added = await DB.put('categories', { name: c.name, icon: c.icon, color: c.color });
+      catRemap.set(c.id, added.id); newCats++;
+    }
+    for (const a of (data.accounts || [])) {
+      const hit = DB.state.accounts.find((x) => x.name.toLowerCase() === (a.name || '').toLowerCase());
+      if (hit) { acctRemap.set(a.id, hit.id); continue; }
+      const added = await DB.put('accounts',
+        { name: a.name, type: a.type, startingBalance: a.startingBalance || 0 });
+      acctRemap.set(a.id, added.id); newAccts++;
+    }
+    for (const r of (data.rules || [])) {
+      const dup = DB.state.rules.some((x) =>
+        (x.keyword || '').toUpperCase() === (r.keyword || '').toUpperCase() && !!x.regex === !!r.regex);
+      if (dup) continue;
+      await DB.put('rules', { keyword: r.keyword, regex: r.regex, categoryId: catRemap.get(r.categoryId) || r.categoryId });
+      newRules++;
+    }
+    for (const p of (data.presets || [])) {
+      if (DB.state.presets.some((x) => x.name === p.name)) continue;
+      await DB.put('presets', { name: p.name, mapping: p.mapping });
+    }
+
+    const byExt = new Set(DB.state.transactions.filter((t) => t.externalId).map((t) => t.externalId));
+    const dupKeys = DB.existingDupKeys();
+    const toAdd = [];
+    let added = 0, skipped = 0;
+    for (const t of (data.transactions || [])) {
+      if (t.externalId && byExt.has(t.externalId)) { skipped++; continue; }
+      const signed = t.type === 'income' ? t.amount : -t.amount;
+      const key = DB.dupKey(t.date, signed, t.note);
+      if (dupKeys.has(key)) { skipped++; continue; }
+      toAdd.push({
+        externalId: t.externalId, date: t.date, amount: t.amount, type: t.type,
+        categoryId: catRemap.get(t.categoryId) || t.categoryId,
+        accountId: acctRemap.get(t.accountId) || t.accountId,
+        note: t.note || '', needsReview: t.needsReview
+      });
+      if (t.externalId) byExt.add(t.externalId);
+      dupKeys.add(key); added++;
+    }
+    if (toAdd.length) await DB.bulkPut('transactions', toAdd);
+
+    // Bring settings only where this device has none, remapping account references.
+    const m = data.meta || {};
+    if (m.budget && !DB.state.meta.budget) await DB.setMeta('budget', m.budget);
+    if (m.bankConsent && !DB.state.meta.bankConsent) await DB.setMeta('bankConsent', m.bankConsent);
+    if (m.bankAccountMap) {
+      const map = Object.assign({}, DB.state.meta.bankAccountMap || {});
+      for (const [uuid, acctId] of Object.entries(m.bankAccountMap)) {
+        if (!map[uuid]) map[uuid] = acctRemap.get(acctId) || acctId;
+      }
+      await DB.setMeta('bankAccountMap', map);
+    }
+    await bumpChanges(added);
+    return { added, skipped, newCats, newAccts, newRules };
   }
 
   function exportCSV(list) {

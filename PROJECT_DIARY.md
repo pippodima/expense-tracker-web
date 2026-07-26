@@ -121,6 +121,16 @@ sign inversion, **duplicate detection** on re-import (date + amount + descriptio
 **saveable per-bank mapping presets**. A preview confirms new vs skipped rows and how many
 were auto-categorized.
 
+**Merging on import (all sources combine, never blindly overwrite):**
+- *Bank sync* upserts by `externalId`; rows with no match are also reconciled against existing
+  **manual/CSV** transactions by date+amount and *adopted* (the bank id attaches to the entry
+  you already logged, keeping your category/note) instead of creating a duplicate.
+- *CSV* skips date+amount+description duplicates.
+- *JSON backup* import offers **Merge** or **Replace**. Merge matches categories & accounts by
+  name (remapping ids so nothing duplicates), dedupes rules, and adds only transactions not
+  already present (by `externalId`, then date+amount+description) — the way to combine two
+  devices without losing either side's data.
+
 **Backups & reminders:** JSON export/import (full backup / device transfer) and filtered CSV
 export. A **change counter** tracks edits since the last backup; a smart trigger
 (`N days` **or** `N changes`, whichever first, with snooze) shows a **friendly reminder
@@ -332,6 +342,22 @@ Shipped:
   *past* transactions (confirm dialog, shows the count and target category). So a rule change
   can update history — answering the user's question with a real capability. `bumpChanges`
   keeps the backup reminder honest.
+
+### Chapter 11 — Merge on import (combine, don't overwrite) (2026-07-26)
+Goal: let imports *merge* with existing data instead of replacing or duplicating — prompted by
+the two-device situation (rules/data on the Mac, not the iPhone) and by bank sync duplicating
+hand-entered purchases.
+Shipped:
+- **JSON backup import now offers Merge or Replace.** Merge matches categories & accounts by
+  name (remapping their ids so nothing duplicates), dedupes rules by keyword+regex, and adds
+  only transactions not already present (by `externalId`, then date+amount+description).
+  Settings (budget/bank map/consent) fill only where the device has none. This is how two
+  devices combine without either losing data.
+- **Bank sync adopts matching manual/CSV entries:** when a bank row has no `externalId` match
+  it looks for an existing hand-entered transaction with the same date+amount and attaches the
+  bank id to it (keeping the user's category/note) rather than duplicating. Summary now reports
+  "merged with entries you already had".
+- Tests: bank adopt-merge + backup name-remap/dedup (10/10).
 
 <!-- When we finish new work, add the next "Chapter N — title (date)" entry here, and update
      the "Current state" / "Roadmap" sections above to match. -->
