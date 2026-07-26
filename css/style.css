@@ -536,6 +536,28 @@ h2 { font-size: 1.05rem; }
 }
 .catbar:active { background: var(--surface-2); }
 .catbar-chev { color: var(--muted); font-size: 1.1rem; flex: 0 0 auto; }
+
+/* Category detail sheet */
+.cat-detail-head { text-align: center; padding: 4px 0 14px; }
+.cat-detail-total { font-size: 2.3rem; font-weight: 700; letter-spacing: -0.02em; }
+.cat-detail-total.pos { color: var(--good); }
+.cat-detail-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cat-tx {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 11px 6px;
+  border-bottom: 1px solid var(--hairline);
+}
+.cat-tx:active { background: var(--surface-2); }
+.cat-tx:last-of-type { border-bottom: none; }
+.cat-tx-main { flex: 1; min-width: 0; }
+.cat-tx-note { font-size: 0.92rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-tx-sub { font-size: 0.75rem; color: var(--muted); margin-top: 1px; }
+.cat-tx-amt { font-weight: 700; font-size: 0.95rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cat-tx-amt.pos { color: var(--good); }
 .catbar-icon {
   width: 34px; height: 34px;
   border-radius: 50%;
@@ -543,9 +565,9 @@ h2 { font-size: 1.05rem; }
   font-size: 1rem; flex: 0 0 auto;
 }
 .catbar-main { flex: 1; min-width: 0; }
-.catbar-top { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
-.catbar-name { font-size: 0.9rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.catbar-val { font-size: 0.9rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.catbar-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.catbar-name { flex: 1; min-width: 0; font-size: 0.92rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.catbar-val { flex: 0 0 auto; font-size: 0.92rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .catbar-track { height: 6px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
 .catbar-fill { height: 100%; border-radius: 4px; }
 

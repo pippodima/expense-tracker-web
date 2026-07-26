@@ -400,5 +400,17 @@ Shipped:
 - `reviewQueue()` broadened to include any transaction in the Uncategorized category (not only
   `needsReview`), so the review section and its count cover everything uncategorized.
 
+### Chapter 15 — Category detail as a dismissable summary sheet (2026-07-26)
+Goal: the tab-jump had no back button and clearing its filters wasn't immediate; replace it
+with a light, self-contained popup.
+Shipped:
+- Tapping a Top-spending category now opens a **bottom sheet** (drag-down/close to dismiss)
+  summarizing that category for the current period: big total, transaction count, % of the
+  month's spending, Average/Biggest tiles, a **By date / By amount** sort toggle, and the list
+  (each row taps through to edit). An **"Open in Activity ›"** button hands off to the full
+  filtered tab for anyone who wants deeper filtering. Uncategorized still opens the review queue.
+- Cleaner formatting for the Top-spending rows (name truncates, value stays put) and the new
+  detail sheet.
+
 <!-- When we finish new work, add the next "Chapter N — title (date)" entry here, and update
      the "Current state" / "Roadmap" sections above to match. -->

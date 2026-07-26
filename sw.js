@@ -1,5 +1,5 @@
 /* Service worker: precache the app shell, serve cache-first, work fully offline. */
-const CACHE = 'expense-tracker-v12';
+const CACHE = 'expense-tracker-v13';
 const ASSETS = [
   './',
   './index.html',

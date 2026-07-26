@@ -446,7 +446,7 @@
       const maxV = items[0].value;
       items.forEach(({ cat, value }) => {
         const color = U.colorOf(cat ? cat.color : 'blue');
-        catCard.append(el('button', { class: 'catbar', onclick: () => openCategoryTransactions(cat) }, [
+        catCard.append(el('button', { class: 'catbar', onclick: () => openCategoryDetail(cat) }, [
           el('span', { class: 'catbar-icon', text: cat ? cat.icon : '❓',
             style: 'background:' + U.tintOf(cat ? cat.color : 'blue') }),
           el('div', { class: 'catbar-main' }, [
@@ -470,19 +470,88 @@
     DB.state.categories.find((c) => c.name.toLowerCase() === 'uncategorized') || null;
 
   /** Tap a Top-spending row: Uncategorized opens the review queue; any other
-      category opens the Activity list filtered to it for the current period,
-      where it can be re-sorted by date/amount. */
-  function openCategoryTransactions(cat) {
+      category opens a light summary sheet for the current period (dismissable),
+      with a sort toggle and an "Open in Activity" escape hatch for full filtering. */
+  function openCategoryDetail(cat) {
     const uc = uncategorizedCat();
     if (cat && uc && cat.id === uc.id) { openReviewSheet(); return; }
     const r = periodRange();
-    ui.tx.q = '';
-    ui.tx.accountId = '';
-    ui.tx.categoryId = cat ? cat.id : '';
-    ui.tx.from = r.from;
-    ui.tx.to = r.to;
-    ui.tx.limit = 100;
-    show('transactions');
+    const catId = cat ? cat.id : null;
+    const all = DB.state.transactions.filter((t) => t.categoryId === catId && inRange(t, r));
+    const expenses = all.filter((t) => t.type === 'expense');
+    const spent = expenses.reduce((s, t) => s + t.amount, 0);
+    const income = all.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+    const monthExp = DB.state.transactions
+      .filter((t) => t.type === 'expense' && inRange(t, r))
+      .reduce((s, t) => s + t.amount, 0);
+    const pct = monthExp > 0 ? Math.round((spent / monthExp) * 100) : 0;
+    const avg = expenses.length ? spent / expenses.length : 0;
+    let sort = 'date';
+
+    openSheet((cat ? cat.icon + ' ' + cat.name : 'Uncategorized'), (body, api) => {
+      body.append(el('div', { class: 'cat-detail-head' }, [
+        el('div', { class: 'cat-detail-total' + (spent === 0 && income > 0 ? ' pos' : ''),
+          text: fmtEUR(spent > 0 || income === 0 ? spent : income) }),
+        el('div', { class: 'muted', text:
+          periodLabel() + ' · ' + all.length + ' transaction' + (all.length === 1 ? '' : 's') +
+          (pct ? ' · ' + pct + '% of spending' : '') })
+      ]));
+
+      if (all.length > 1) {
+        body.append(el('div', { class: 'cat-detail-stats' }, [
+          el('div', { class: 'tile' }, [
+            el('div', { class: 't-label', text: 'Average' }),
+            el('div', { class: 't-value', style: 'font-size:1.1rem', text: fmtEUR(avg) })
+          ]),
+          el('div', { class: 'tile' }, [
+            el('div', { class: 't-label', text: 'Biggest' }),
+            el('div', { class: 't-value', style: 'font-size:1.1rem',
+              text: fmtEUR(Math.max(0, ...expenses.map((t) => t.amount))) })
+          ])
+        ]));
+      }
+
+      const seg = el('div', { class: 'seg', style: 'margin:14px 0 10px' });
+      const bDate = el('button', { text: 'By date' });
+      const bAmt = el('button', { text: 'By amount' });
+      const listWrap = el('div');
+      const syncSeg = () => {
+        bDate.className = sort === 'date' ? 'active' : '';
+        bAmt.className = sort === 'amount' ? 'active' : '';
+      };
+      const drawList = () => {
+        const sorted = [...all].sort(sort === 'amount'
+          ? (a, b) => b.amount - a.amount
+          : (a, b) => b.date.localeCompare(a.date));
+        listWrap.innerHTML = '';
+        sorted.forEach((t) => {
+          const acct = DB.account(t.accountId);
+          listWrap.append(el('button', { class: 'cat-tx', onclick: () => openTxSheet(t) }, [
+            el('div', { class: 'cat-tx-main' }, [
+              el('div', { class: 'cat-tx-note', text: t.note || (cat ? cat.name : 'Transaction') }),
+              el('div', { class: 'cat-tx-sub', text: U.fmtDate(t.date) + (acct ? ' · ' + acct.name : '') })
+            ]),
+            el('div', { class: 'cat-tx-amt' + (t.type === 'income' ? ' pos' : ''),
+              text: (t.type === 'income' ? '+ ' : '− ') + fmtEUR(t.amount) })
+          ]));
+        });
+      };
+      bDate.addEventListener('click', () => { sort = 'date'; syncSeg(); drawList(); });
+      bAmt.addEventListener('click', () => { sort = 'amount'; syncSeg(); drawList(); });
+      syncSeg(); seg.append(bDate, bAmt);
+      body.append(seg, listWrap);
+      drawList();
+
+      body.append(el('button', {
+        class: 'btn block ghost', style: 'margin-top:14px', text: 'Open in Activity ›',
+        onclick: () => {
+          api.close();
+          ui.tx.q = ''; ui.tx.accountId = ''; ui.tx.categoryId = catId || '';
+          ui.tx.from = r.from; ui.tx.to = r.to; ui.tx.limit = 100;
+          show('transactions');
+        }
+      }));
+    });
   }
 
   function shiftMonth(delta) {
