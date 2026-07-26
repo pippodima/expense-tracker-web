@@ -359,5 +359,16 @@ Shipped:
   "merged with entries you already had".
 - Tests: bank adopt-merge + backup name-remap/dedup (10/10).
 
+### Chapter 12 — Open onto the month that has data (2026-07-26)
+Goal: after importing, Home/Stats still showed 0 € because they default to the *current* month
+(the device's real clock), while the data sits in other months — and the earlier import-time
+jump was lost on reload and never ran for the backup-merge path.
+Shipped:
+- `focusLatestData()`: on app load (and after a backup merge/replace), if the current month has
+  no transactions but data exists elsewhere, Home and Stats open on the **most recent month that
+  has data** instead of an empty current month. No-op when the current month already has data.
+- Verified the decision logic (3/3). This is a durable fix (runs every boot), unlike the
+  transient per-import jump.
+
 <!-- When we finish new work, add the next "Chapter N — title (date)" entry here, and update
      the "Current state" / "Roadmap" sections above to match. -->

@@ -476,6 +476,21 @@
     renderDashboard();
   }
 
+  /** Land Home/Stats on the most recent month that actually has data, so the views
+      aren't empty when all the history is in a month other than the real "today"
+      (e.g. imported data). No-op if the current month already has transactions. */
+  function focusLatestData() {
+    const txs = DB.state.transactions;
+    if (!txs.length) return;
+    const cur = U.monthRange(now.getFullYear(), now.getMonth());
+    if (txs.some((t) => t.date >= cur.from && t.date <= cur.to)) return;
+    const latest = txs.reduce((mx, t) => (t.date > mx ? t.date : mx), txs[0].date);
+    const [ly, lm] = latest.split('-').map(Number);
+    ui.period = { type: 'month', y: ly, m0: lm - 1 };
+    ui.donutSel = null;
+    ui.stats.y = ly; ui.stats.m0 = lm - 1; ui.stats.donutSel = null;
+  }
+
   function openRangeSheet() {
     openSheet('Period', (body, api) => {
       const r = periodRange();
@@ -1962,6 +1977,7 @@
             onclick: async () => {
               api.close();
               const res = await mergeBackup(data);
+              focusLatestData();
               openSheet('Backup merged', (b2, a2) => {
                 b2.append(el('div', { class: 'import-summary card', html:
                   `<span class="ok">${res.added} new transactions added</span><br>` +
@@ -1988,6 +2004,7 @@
               await DB.replaceAll(data);
               await DB.setMeta('changesSinceBackup', 0);
               await DB.setMeta('installedAt', Date.now());
+              focusLatestData();
               toast('Backup restored'); render();
             }
           })
@@ -2375,6 +2392,7 @@
 
   async function boot() {
     await DB.init();
+    focusLatestData();   // don't open onto an empty current month when data is elsewhere
     $$('.tabbar [data-tab]').forEach((b) =>
       b.addEventListener('click', () => show(b.dataset.tab)));
     $('#fab').addEventListener('click', () => openTxSheet(null));
