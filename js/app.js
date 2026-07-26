@@ -33,7 +33,7 @@
 
   /* ======================= Sheets & dialogs ======================= */
 
-  function openSheet(title, build) {
+  function openSheet(title, build, opts) {
     const z = ++ui.sheetZ;
     const backdrop = el('div', { class: 'sheet-backdrop', style: `z-index:${z}` });
     const head = el('div', { class: 'sheet-head' }, [
@@ -42,7 +42,8 @@
     ]);
     const body = el('div', { class: 'sheet-body' });
     const grip = el('div', { class: 'sheet-grip' });
-    const sheet = el('div', { class: 'sheet', style: `z-index:${z + 1}` }, [grip, head, body]);
+    const sheet = el('div', { class: 'sheet' + (opts && opts.tall ? ' tall' : ''), style: `z-index:${z + 1}` },
+      [grip, head, body]);
     document.body.append(backdrop, sheet);
     requestAnimationFrame(() => { backdrop.classList.add('show'); sheet.classList.add('show'); });
 
@@ -486,6 +487,7 @@
       .reduce((s, t) => s + t.amount, 0);
     const pct = monthExp > 0 ? Math.round((spent / monthExp) * 100) : 0;
     const avg = expenses.length ? spent / expenses.length : 0;
+    const biggest = expenses.reduce((mx, t) => (!mx || t.amount > mx.amount ? t : mx), null);
     let sort = 'date';
 
     openSheet((cat ? cat.icon + ' ' + cat.name : 'Uncategorized'), (body, api) => {
@@ -497,16 +499,16 @@
           (pct ? ' · ' + pct + '% of spending' : '') })
       ]));
 
-      if (all.length > 1) {
+      if (all.length > 1 && biggest) {
         body.append(el('div', { class: 'cat-detail-stats' }, [
           el('div', { class: 'tile' }, [
             el('div', { class: 't-label', text: 'Average' }),
             el('div', { class: 't-value', style: 'font-size:1.1rem', text: fmtEUR(avg) })
           ]),
-          el('div', { class: 'tile' }, [
-            el('div', { class: 't-label', text: 'Biggest' }),
-            el('div', { class: 't-value', style: 'font-size:1.1rem',
-              text: fmtEUR(Math.max(0, ...expenses.map((t) => t.amount))) })
+          // Biggest is tappable — jumps to that specific transaction.
+          el('button', { class: 'tile tile-btn', onclick: () => openTxSheet(biggest) }, [
+            el('div', { class: 't-label', text: 'Biggest ›' }),
+            el('div', { class: 't-value', style: 'font-size:1.1rem', text: fmtEUR(biggest.amount) })
           ])
         ]));
       }
@@ -551,7 +553,7 @@
           show('transactions');
         }
       }));
-    });
+    }, { tall: true });
   }
 
   function shiftMonth(delta) {

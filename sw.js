@@ -1,5 +1,6 @@
-/* Service worker: precache the app shell, serve cache-first, work fully offline. */
-const CACHE = 'expense-tracker-v13';
+/* Service worker: network-first for our own files (so updates always reach the
+   device when online), cache fallback so the app still works fully offline. */
+const CACHE = 'expense-tracker-v14';
 const ASSETS = [
   './',
   './index.html',
@@ -31,21 +32,23 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
+  const url = new URL(e.request.url);
+  if (url.origin !== location.origin) return; // don't touch cross-origin
+
+  // Network-first: fetch fresh, update the cache, fall back to cache when offline.
   e.respondWith(
-    caches.match(e.request, { ignoreSearch: true }).then((hit) => {
-      if (hit) return hit;
-      return fetch(e.request)
-        .then((res) => {
-          if (res.ok && new URL(e.request.url).origin === location.origin) {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(e.request, copy));
-          }
-          return res;
-        })
-        .catch(() => {
-          if (e.request.mode === 'navigate') return caches.match('./index.html');
-          return Response.error();
-        });
-    })
+    fetch(e.request)
+      .then((res) => {
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, copy));
+        }
+        return res;
+      })
+      .catch(() => caches.match(e.request, { ignoreSearch: true }).then((hit) => {
+        if (hit) return hit;
+        if (e.request.mode === 'navigate') return caches.match('./index.html');
+        return Response.error();
+      }))
   );
 });

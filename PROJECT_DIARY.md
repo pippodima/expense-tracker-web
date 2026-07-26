@@ -412,5 +412,20 @@ Shipped:
 - Cleaner formatting for the Top-spending rows (name truncates, value stays put) and the new
   detail sheet.
 
-<!-- When we finish new work, add the next "Chapter N — title (date)" entry here, and update
-     the "Current state" / "Roadmap" sections above to match. -->
+### Chapter 16 — Network-first SW + category-sheet polish (2026-07-26)
+Goal: the phone kept showing stale CSS (new JS, old styles) — the recurring "reload to get vN"
+problem — plus polish the category detail sheet.
+Root cause of the stale styles: cache-first service worker + iOS standalone PWAs clinging to
+cached files, so `style.css` didn't refresh while JS did.
+Shipped:
+- **Service worker switched to network-first** for same-origin requests (fetch fresh, update
+  cache, fall back to cache offline). When online the device always gets the latest CSS/JS;
+  offline still works. Ends the manual "bump-and-pray" cache dance going forward.
+- **"Biggest" tile is now tappable** → opens that specific (largest) transaction.
+- **Category detail sheet opens tall** (88dvh via a `tall` openSheet option) so it isn't a
+  half-screen popup; `sheet-body` now flexes/scrolls to fill. Added `.tile-btn` for the
+  clickable tile.
+Note: the transaction-row layout in the sheet was correct in CSS all along — it only looked
+"poor" because the phone was rendering it unstyled from the stale cache; network-first fixes
+that. One forced update (fully close & reopen the app, or re-add to Home Screen) is needed to
+land the new SW; after that updates are automatic.
