@@ -22,3 +22,4 @@ __pycache__/
 # Pasted bank statements used only for local testing
 test.txt
 *.paste.txt
+test.json

@@ -476,6 +476,60 @@
     renderDashboard();
   }
 
+  /** Repair transactions/accounts that got stored in a raw shape — e.g. a bank-sync
+      file imported through the backup importer, which leaves rows with a signed
+      `amount`, no `type`, and `accountUuid` instead of a real `accountId`. Idempotent:
+      once fixed, nothing matches the broken conditions on later loads. */
+  async function repairData() {
+    if (!DB.state.accounts.length || !DB.state.transactions.length) return 0;
+
+    // Normalize accounts first (bank-sync accounts arrive without type/startingBalance).
+    const acctFixes = [];
+    for (const a of DB.state.accounts) {
+      if (a.type && typeof a.startingBalance === 'number') continue;
+      acctFixes.push({ ...a, type: a.type || 'checking',
+        startingBalance: typeof a.startingBalance === 'number' ? a.startingBalance : 0 });
+    }
+    if (acctFixes.length) await DB.bulkPut('accounts', acctFixes);
+
+    const validAcct = new Set(DB.state.accounts.map((a) => a.id));
+    // uuid → accountId, from account.uuid (kept on bank-sync accounts) and the saved map.
+    const uuidToId = new Map();
+    DB.state.accounts.forEach((a) => { if (a.uuid) uuidToId.set(a.uuid, a.id); });
+    Object.entries(DB.state.meta.bankAccountMap || {}).forEach(([u, id]) => {
+      if (validAcct.has(id)) uuidToId.set(u, id);
+    });
+    const fallbackAcct = DB.state.accounts[0].id;
+
+    let uncat = null;
+    const needUncat = DB.state.transactions.some(
+      (t) => !t.categoryId || !DB.category(t.categoryId));
+    if (needUncat) uncat = await ensureCategory('Uncategorized', '❓');
+
+    const fixes = [];
+    for (const t of DB.state.transactions) {
+      const o = { ...t };
+      let changed = false;
+      if (o.type !== 'income' && o.type !== 'expense') {
+        o.type = Number(o.amount) < 0 ? 'expense' : 'income'; changed = true;
+      }
+      if (typeof o.amount === 'number' && o.amount < 0) {
+        o.amount = Math.round(Math.abs(o.amount) * 100) / 100; changed = true;
+      }
+      if (!validAcct.has(o.accountId)) {
+        o.accountId = (o.accountUuid && uuidToId.get(o.accountUuid)) || fallbackAcct;
+        changed = true;
+      }
+      if ('accountUuid' in o) { delete o.accountUuid; changed = true; }
+      if (!o.categoryId || !DB.category(o.categoryId)) {
+        o.categoryId = uncat.id; o.needsReview = true; changed = true;
+      }
+      if (changed) fixes.push(o);
+    }
+    if (fixes.length) await DB.bulkPut('transactions', fixes);
+    return fixes.length;
+  }
+
   /** Land Home/Stats on the most recent month that actually has data, so the views
       aren't empty when all the history is in a month other than the real "today"
       (e.g. imported data). No-op if the current month already has transactions. */
@@ -1637,26 +1691,30 @@
   }
 
   function importBankSync() {
-    pickFile('.json,application/json', async (text) => {
+    pickFile('.json,application/json', (text) => {
       let data;
       try { data = JSON.parse(text); } catch { return toast('Not a valid JSON file'); }
-      if (!data || data.kind !== 'bank-sync' || !Array.isArray(data.transactions)) {
-        return toast('Not a bank sync file — create one with sync/bank_sync.py');
-      }
-      // Remember consent expiry so the app can warn before the 90 days run out.
-      if (data.agreement && data.agreement.expiresAt) {
-        await DB.setMeta('bankConsent', {
-          institutionId: data.institutionId || '',
-          createdAt: data.agreement.createdAt || Date.now(),
-          expiresAt: data.agreement.expiresAt
-        });
-      }
-      const uuids = [...new Set(data.transactions.map((t) => t.accountUuid).filter(Boolean))];
-      const map = Object.assign({}, DB.state.meta.bankAccountMap || {});
-      const unmapped = uuids.filter((u) => !map[u] || !DB.account(map[u]));
-      if (unmapped.length) return openBankMapSheet(unmapped, data, map);
-      await applyBankSync(data, map);
+      handleBankSyncData(data);
     });
+  }
+
+  async function handleBankSyncData(data) {
+    if (!data || data.kind !== 'bank-sync' || !Array.isArray(data.transactions)) {
+      return toast('Not a bank sync file — create one with sync/bank_sync.py');
+    }
+    // Remember consent expiry so the app can warn before the 90 days run out.
+    if (data.agreement && data.agreement.expiresAt) {
+      await DB.setMeta('bankConsent', {
+        institutionId: data.institutionId || '',
+        createdAt: data.agreement.createdAt || Date.now(),
+        expiresAt: data.agreement.expiresAt
+      });
+    }
+    const uuids = [...new Set(data.transactions.map((t) => t.accountUuid).filter(Boolean))];
+    const map = Object.assign({}, DB.state.meta.bankAccountMap || {});
+    const unmapped = uuids.filter((u) => !map[u] || !DB.account(map[u]));
+    if (unmapped.length) return openBankMapSheet(unmapped, data, map);
+    await applyBankSync(data, map);
   }
 
   /** First import from a new bank account: ask which app account it belongs to. */
@@ -1964,6 +2022,12 @@
     pickFile('.json,application/json', async (text) => {
       let data;
       try { data = JSON.parse(text); } catch { return toast('Not a valid JSON file'); }
+      // A bank-sync file also has transactions[]+accounts[] but a different shape —
+      // route it to the bank importer instead of storing its raw rows as a backup.
+      if (data && data.kind === 'bank-sync') {
+        toast('That’s a bank sync file — importing it the right way');
+        return handleBankSyncData(data);
+      }
       if (!data || !Array.isArray(data.transactions) || !Array.isArray(data.accounts)) {
         return toast('Not an Expense Tracker backup');
       }
@@ -1977,6 +2041,7 @@
             onclick: async () => {
               api.close();
               const res = await mergeBackup(data);
+              await repairData();
               focusLatestData();
               openSheet('Backup merged', (b2, a2) => {
                 b2.append(el('div', { class: 'import-summary card', html:
@@ -2004,6 +2069,7 @@
               await DB.replaceAll(data);
               await DB.setMeta('changesSinceBackup', 0);
               await DB.setMeta('installedAt', Date.now());
+              await repairData();
               focusLatestData();
               toast('Backup restored'); render();
             }
@@ -2392,6 +2458,7 @@
 
   async function boot() {
     await DB.init();
+    await repairData();  // heal any raw/mis-imported records before first render
     focusLatestData();   // don't open onto an empty current month when data is elsewhere
     $$('.tabbar [data-tab]').forEach((b) =>
       b.addEventListener('click', () => show(b.dataset.tab)));

@@ -370,5 +370,25 @@ Shipped:
 - Verified the decision logic (3/3). This is a durable fix (runs every boot), unlike the
   transient per-import jump.
 
+### Chapter 13 — Root-cause the empty Home/Stats/Accounts + self-heal (2026-07-26)
+Goal: Home/Stats/Accounts all showed 0 € while Activity was full. Got the user's exported
+backup (`test.json`) and inspected it instead of guessing further.
+Root cause: the `bank-sync-*.json` file had been imported through **Settings → Import backup
+(JSON)** instead of **Bank sync → Import bank sync file**. The backup importer accepts anything
+with `transactions[]`+`accounts[]`, so it stored the *raw bank rows* directly — every
+transaction ended up with a signed `amount`, **no `type`**, and **`accountUuid` instead of
+`accountId`**. Result: income/expense summed to 0 (no type) and no transaction matched any
+account (bad id). Dates were fine, so Activity (unfiltered) still listed everything.
+Shipped:
+- `repairData()` on every boot (and after backup merge/replace): normalizes accounts (missing
+  type/startingBalance) and heals transactions — derive `type` from the amount sign, make
+  `amount` positive, relink `accountUuid`→`accountId` via the account's kept `uuid` (or the
+  saved bank map, or the first account), drop `accountUuid`, and send category-less rows to the
+  review queue. Idempotent. Verified on the real file: 119 typed, 119 relinked (buddybank
+  balance €0 → €2 821,41), all three months populate.
+- Guard: **Import backup now detects a `kind:"bank-sync"` file and routes it to the bank
+  importer** instead of storing raw rows; refactored the bank-sync handler so both entry points
+  share it.
+
 <!-- When we finish new work, add the next "Chapter N — title (date)" entry here, and update
      the "Current state" / "Roadmap" sections above to match. -->
