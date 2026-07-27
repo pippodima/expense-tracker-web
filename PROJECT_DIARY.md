@@ -429,3 +429,23 @@ Note: the transaction-row layout in the sheet was correct in CSS all along — i
 "poor" because the phone was rendering it unstyled from the stale cache; network-first fixes
 that. One forced update (fully close & reopen the app, or re-add to Home Screen) is needed to
 land the new SW; after that updates are automatic.
+
+### Chapter 17 — All categories in Stats + group by place (2026-07-27)
+Goal: Home shows only the top 5 categories; Stats should list **all** of them for the period,
+and opening a category should let you see spending grouped **per merchant** (e.g. total at Zara
+this month).
+Shipped:
+- **Stats → "All categories"** card: every category with spending in the selected period
+  (Month/Year/All/Custom), sorted, with bar + % share; tapping opens the same category detail
+  sheet, now parameterized by range so it reports the Stats period rather than Home's month.
+- **"By place" view** in the category sheet (segment is now Date / Amount / By place): groups
+  transactions by merchant with total + count; tap a group to expand its transactions.
+- `merchantKey()` brand normalization: strips payment-processor prefixes (`PAYPAL *`,
+  `SumUp *`, `NYX*`…), drops noise tokens, then keys on the brand word — a *generic* first word
+  (BAR, MENSA, PIZZERIA, LAVANDERIA…) keeps two words so "BAR SCARPACCIA" ≠ "BAR CAFFE", while
+  everything else groups on the brand alone so `ZARA MILANO 4471` = `ZARA` and
+  `ESSELUNGA CANOVA` = `ESSELUNGA NOVOLI`. Verified 18/18 cases against the real statement
+  descriptions (64 distinct descriptions → 58 merchant groups).
+
+<!-- When we finish new work, add the next "Chapter N — title (date)" entry here, and update
+     the "Current state" / "Roadmap" sections above to match. -->

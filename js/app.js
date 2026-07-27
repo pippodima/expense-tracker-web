@@ -470,13 +470,63 @@
   const uncategorizedCat = () =>
     DB.state.categories.find((c) => c.name.toLowerCase() === 'uncategorized') || null;
 
-  /** Tap a Top-spending row: Uncategorized opens the review queue; any other
-      category opens a light summary sheet for the current period (dismissable),
-      with a sort toggle and an "Open in Activity" escape hatch for full filtering. */
-  function openCategoryDetail(cat) {
+  /* ---- Merchant ("place") grouping ------------------------------------------
+     Bank descriptions vary per store/branch — ESSELUNGA CANOVA vs ESSELUNGA
+     NOVOLI, UNICOOP-FIRENZE vs UNICOOP SCANDICCI — so we derive a brand key:
+     drop the payment-processor prefix, keep the leading distinctive word(s). */
+  const PROCESSOR_PREFIXES = ['PAYPAL', 'SUMUP', 'PPG', 'NYX', 'SQ', 'ZETTLE', 'IZ', 'SP',
+    'STRIPE', 'WISE', 'SATISPAY'];
+  // Words too generic to identify a place on their own — keep the next word too.
+  const GENERIC_WORDS = new Set(['BAR', 'CAFFE', 'CAFE', 'MENSA', 'PIZZERIA', 'RISTORANTE',
+    'OSTERIA', 'TRATTORIA', 'GELATERIA', 'PASTICCERIA', 'PANETTERIA', 'MACELLERIA',
+    'FARMACIA', 'PHARMACIE', 'SUPERMERCATO', 'TABACCHERIA', 'LAVANDERIA', 'HOTEL', 'PUB',
+    'MERCATO', 'NUOVA', 'GRUPPO', 'AZIENDA', 'COMUNE', 'CIR', 'LA', 'IL', 'LE', 'LES',
+    'DI', 'DE', 'GRANDE', 'CASA', 'PIU']);
+
+  function merchantKey(note) {
+    let s = String(note || '').toUpperCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    // "PAYPAL *MICROSOFT" / "SumUp *La Scatola A" -> drop the processor
+    const star = s.match(/^([A-Z0-9]{2,10})\s*\*\s*(.+)$/);
+    if (star && PROCESSOR_PREFIXES.includes(star[1])) s = star[2];
+    const tokens = s.replace(/[^A-Z0-9]+/g, ' ').trim().split(' ')
+      .filter((w) => w.length > 2 && !/^\d+$/.test(w));
+    if (!tokens.length) return String(note || '').trim().toUpperCase() || '—';
+    // A generic first word (BAR, MENSA, PIZZERIA…) needs the next word to identify
+    // the place; anything else is a brand that stands on its own, so "ZARA MILANO
+    // 4471" and "ZARA" group together.
+    return GENERIC_WORDS.has(tokens[0]) ? tokens.slice(0, 2).join(' ') : tokens[0];
+  }
+
+  /** Group transactions by place: [{ key, label, total, count, txs }] desc by total. */
+  function groupByMerchant(txs) {
+    const groups = new Map();
+    for (const t of txs) {
+      const key = merchantKey(t.note);
+      if (!groups.has(key)) groups.set(key, { key, total: 0, count: 0, txs: [], labels: new Map() });
+      const g = groups.get(key);
+      g.total += t.type === 'income' ? -t.amount : t.amount;
+      g.count++;
+      g.txs.push(t);
+      const nm = (t.note || '').trim() || key;
+      g.labels.set(nm, (g.labels.get(nm) || 0) + 1);
+    }
+    return [...groups.values()].map((g) => {
+      // Label the group with its most frequent original description.
+      const label = [...g.labels.entries()].sort((a, b) => b[1] - a[1] || a[0].length - b[0].length)[0][0];
+      g.txs.sort((a, b) => b.date.localeCompare(a.date));
+      return { key: g.key, label, total: g.total, count: g.count, txs: g.txs };
+    }).sort((a, b) => b.total - a.total);
+  }
+
+  /** Tap a Top-spending / All-categories row: Uncategorized opens the review queue;
+      any other category opens a light summary sheet for the given period, with
+      date/amount/place views and an "Open in Activity" escape hatch. */
+  function openCategoryDetail(cat, range, rangeLabel) {
     const uc = uncategorizedCat();
     if (cat && uc && cat.id === uc.id) { openReviewSheet(); return; }
-    const r = periodRange();
+    const r = range || periodRange();
+    const label = rangeLabel || periodLabel();
     const catId = cat ? cat.id : null;
     const all = DB.state.transactions.filter((t) => t.categoryId === catId && inRange(t, r));
     const expenses = all.filter((t) => t.type === 'expense');
@@ -495,7 +545,7 @@
         el('div', { class: 'cat-detail-total' + (spent === 0 && income > 0 ? ' pos' : ''),
           text: fmtEUR(spent > 0 || income === 0 ? spent : income) }),
         el('div', { class: 'muted', text:
-          periodLabel() + ' · ' + all.length + ' transaction' + (all.length === 1 ? '' : 's') +
+          label + ' · ' + all.length + ' transaction' + (all.length === 1 ? '' : 's') +
           (pct ? ' · ' + pct + '% of spending' : '') })
       ]));
 
@@ -513,34 +563,64 @@
         ]));
       }
 
-      const seg = el('div', { class: 'seg', style: 'margin:14px 0 10px' });
-      const bDate = el('button', { text: 'By date' });
-      const bAmt = el('button', { text: 'By amount' });
+      const seg = el('div', { class: 'seg seg-4', style: 'margin:14px 0 10px' });
+      const bDate = el('button', { text: 'Date' });
+      const bAmt = el('button', { text: 'Amount' });
+      const bPlace = el('button', { text: 'By place' });
       const listWrap = el('div');
       const syncSeg = () => {
         bDate.className = sort === 'date' ? 'active' : '';
         bAmt.className = sort === 'amount' ? 'active' : '';
+        bPlace.className = sort === 'place' ? 'active' : '';
       };
+
+      const txRowEl = (t) => {
+        const acct = DB.account(t.accountId);
+        return el('button', { class: 'cat-tx', onclick: () => openTxSheet(t) }, [
+          el('div', { class: 'cat-tx-main' }, [
+            el('div', { class: 'cat-tx-note', text: t.note || (cat ? cat.name : 'Transaction') }),
+            el('div', { class: 'cat-tx-sub', text: U.fmtDate(t.date) + (acct ? ' · ' + acct.name : '') })
+          ]),
+          el('div', { class: 'cat-tx-amt' + (t.type === 'income' ? ' pos' : ''),
+            text: (t.type === 'income' ? '+ ' : '− ') + fmtEUR(t.amount) })
+        ]);
+      };
+
       const drawList = () => {
+        listWrap.innerHTML = '';
+        if (sort === 'place') {
+          const groups = groupByMerchant(all);
+          groups.forEach((g) => {
+            const sub = el('div', { class: 'place-sub' });
+            let open = false;
+            const row = el('button', { class: 'place-row', onclick: () => {
+              open = !open;
+              sub.classList.toggle('show', open);
+              row.querySelector('.place-chev').textContent = open ? '⌄' : '›';
+            } }, [
+              el('div', { class: 'place-main' }, [
+                el('div', { class: 'place-name', text: g.label }),
+                el('div', { class: 'place-count', text:
+                  g.count + (g.count === 1 ? ' transaction' : ' transactions') })
+              ]),
+              el('div', { class: 'place-total', text: fmtEUR(Math.abs(g.total)) }),
+              el('span', { class: 'place-chev', text: '›' })
+            ]);
+            g.txs.forEach((t) => sub.append(txRowEl(t)));
+            listWrap.append(el('div', { class: 'place-group' }, [row, sub]));
+          });
+          return;
+        }
         const sorted = [...all].sort(sort === 'amount'
           ? (a, b) => b.amount - a.amount
           : (a, b) => b.date.localeCompare(a.date));
-        listWrap.innerHTML = '';
-        sorted.forEach((t) => {
-          const acct = DB.account(t.accountId);
-          listWrap.append(el('button', { class: 'cat-tx', onclick: () => openTxSheet(t) }, [
-            el('div', { class: 'cat-tx-main' }, [
-              el('div', { class: 'cat-tx-note', text: t.note || (cat ? cat.name : 'Transaction') }),
-              el('div', { class: 'cat-tx-sub', text: U.fmtDate(t.date) + (acct ? ' · ' + acct.name : '') })
-            ]),
-            el('div', { class: 'cat-tx-amt' + (t.type === 'income' ? ' pos' : ''),
-              text: (t.type === 'income' ? '+ ' : '− ') + fmtEUR(t.amount) })
-          ]));
-        });
+        sorted.forEach((t) => listWrap.append(txRowEl(t)));
       };
+
       bDate.addEventListener('click', () => { sort = 'date'; syncSeg(); drawList(); });
       bAmt.addEventListener('click', () => { sort = 'amount'; syncSeg(); drawList(); });
-      syncSeg(); seg.append(bDate, bAmt);
+      bPlace.addEventListener('click', () => { sort = 'place'; syncSeg(); drawList(); });
+      syncSeg(); seg.append(bDate, bAmt, bPlace);
       body.append(seg, listWrap);
       drawList();
 
@@ -884,6 +964,44 @@
       donutCard.append(wrap, legend);
     }
     root.append(donutCard);
+
+    // All categories for the period (not just the top few) — tap for the detail sheet
+    const allCats = [...byCat.entries()]
+      .map(([id, value]) => ({ cat: DB.category(id), value }))
+      .sort((a, b) => b.value - a.value);
+    if (allCats.length) {
+      const listCard = el('div', { class: 'card' }, [
+        el('div', { class: 'card-head' }, [
+          el('h2', { text: 'All categories' }),
+          el('span', { class: 'muted', text: allCats.length + ' total' })
+        ])
+      ]);
+      const maxV = allCats[0].value;
+      allCats.forEach(({ cat, value }) => {
+        const color = U.colorOf(cat ? cat.color : 'blue');
+        const share = expense > 0 ? Math.round((value / expense) * 100) : 0;
+        listCard.append(el('button', {
+          class: 'catbar',
+          onclick: () => openCategoryDetail(cat, { from: rg.from, to: rg.to }, rg.label)
+        }, [
+          el('span', { class: 'catbar-icon', text: cat ? cat.icon : '❓',
+            style: 'background:' + U.tintOf(cat ? cat.color : 'blue') }),
+          el('div', { class: 'catbar-main' }, [
+            el('div', { class: 'catbar-top' }, [
+              el('span', { class: 'catbar-name', text: cat ? cat.name : 'Uncategorized' }),
+              el('span', { class: 'catbar-val', text: fmtEUR(value) })
+            ]),
+            el('div', { class: 'catbar-track' }, [
+              el('div', { class: 'catbar-fill',
+                style: 'width:' + (maxV > 0 ? (value / maxV) * 100 : 0) + '%;background:' + color })
+            ])
+          ]),
+          el('span', { class: 'catbar-pct', text: share + '%' }),
+          el('span', { class: 'catbar-chev', text: '›' })
+        ]));
+      });
+      root.append(listCard);
+    }
   }
 
   function legendKey(color, label) {
