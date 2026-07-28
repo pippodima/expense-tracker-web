@@ -363,25 +363,6 @@
       ]));
     }
 
-    // Bank consent expiry (PSD2: dies after 90 days)
-    const consent = DB.state.meta.bankConsent;
-    if (consent && consent.expiresAt) {
-      const daysLeft = Math.floor((consent.expiresAt - Date.now()) / 86400000);
-      if (daysLeft < 0) {
-        root.append(el('div', { class: 'banner' }, [
-          el('span', { text: '🏦', style: 'font-size:1.3rem' }),
-          el('div', { class: 'b-main', html: '<strong>Bank link expired</strong>' +
-            'The 90-day consent has ended — run <code>bank_sync.py link</code> to reconnect.' })
-        ]));
-      } else if (daysLeft <= 7) {
-        root.append(el('div', { class: 'banner' }, [
-          el('span', { text: '🏦', style: 'font-size:1.3rem' }),
-          el('div', { class: 'b-main', html: '<strong>Bank link expiring</strong>' +
-            `Consent ends in ${daysLeft} day${daysLeft === 1 ? '' : 's'} — re-link with <code>bank_sync.py link</code> soon.` })
-        ]));
-      }
-    }
-
     // Imported transactions waiting for a category
     const pending = reviewQueue().length;
     if (pending > 0) {
@@ -2155,7 +2136,6 @@
 
     const bud = DB.state.meta.budget;
     const last = DB.state.meta.lastBackup;
-    const consent = DB.state.meta.bankConsent;
     const reviewN = reviewQueue().length;
 
     /* ---------- Budget ---------- */
@@ -2275,19 +2255,13 @@
     /* ---------- Import (bank sync + CSV) ---------- */
     root.append(settingsSection('import', '📥', 'Import transactions',
       reviewN > 0 ? reviewN + ' waiting for a category' : 'Bank sync · CSV', (b) => {
-        b.append(el('div', { class: 'sub-title', text: 'Bank sync (buddybank)' }),
+        b.append(el('div', { class: 'sub-title', text: 'Statement file' }),
           el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:10px', text:
-            'Automatic import via GoCardless (free PSD2). The fetch runs on this phone in a-Shell ' +
-            '(see sync/README.md) and produces a file you import here. Re-imports merge — never duplicate.' }),
-          el('button', { class: 'btn block primary', text: '🏦 Import bank sync file',
+            'Paste your bank statement into a text file, convert it with sync/paste_to_sync.py ' +
+            '(runs on this phone in a-Shell — see sync/README.md), then import the result here. ' +
+            'Re-imports merge — never duplicate.' }),
+          el('button', { class: 'btn block primary', text: '🏦 Import statement file',
             onclick: importBankSync }));
-        if (consent && consent.expiresAt) {
-          const daysLeft = Math.floor((consent.expiresAt - Date.now()) / 86400000);
-          b.append(el('p', { class: 'muted', style: 'margin-top:10px', text:
-            daysLeft < 0 ? '⚠️ Bank consent expired — re-link with bank_sync.py link.'
-              : 'Bank consent valid for ' + daysLeft + ' more day' + (daysLeft === 1 ? '' : 's') +
-                (daysLeft <= 7 ? ' — re-link soon.' : '.') }));
-        }
         if (reviewN > 0) {
           b.append(el('div', { class: 'spacer' }),
             el('button', { class: 'btn block', text: '🏷 Review queue (' + reviewN + ')',
@@ -2386,48 +2360,6 @@
           el('hr', { class: 'sep' })
         );
         reminderSettingsBody(b);
-      }));
-
-    /* ---------- Privacy / app lock ---------- */
-    const lock = lockCfg();
-    root.append(settingsSection('privacy', '🔐', 'Privacy',
-      lock.enabled ? 'App lock on' : 'App lock off', (b) => {
-        b.append(el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:12px', text:
-          'Ask for Face ID / Touch ID before the app opens. It hides the screen from anyone ' +
-          'picking up your phone — but it does not encrypt the database, so it is a lock on ' +
-          'the door, not a safe. Use an encrypted backup for the file itself.' }));
-        if (!webauthnSupported()) {
-          b.append(el('p', { class: 'muted', style: 'line-height:1.5', text:
-            location.protocol === 'https:'
-              ? 'This device or browser doesn’t support biometric unlock.'
-              : 'Biometric unlock needs HTTPS — it becomes available once the app is hosted ' +
-                '(e.g. GitHub Pages), not over a plain local address.' }));
-          return;
-        }
-        if (!lock.enabled) {
-          b.append(el('button', { class: 'btn block primary', text: '🔒 Enable app lock',
-            onclick: enableAppLock }));
-        } else {
-          const graceSel = el('select', {}, [[0, 'Every time the app opens'],
-            [5 * 60000, 'If away for more than 5 minutes'],
-            [30 * 60000, 'If away for more than 30 minutes']].map(([v, l]) =>
-            el('option', { value: String(v), text: l })));
-          graceSel.value = String(lock.graceMs || 0);
-          graceSel.addEventListener('change', async () => {
-            await DB.setMeta('appLock', Object.assign({}, lock,
-              { graceMs: Number(graceSel.value) }));
-            ui.settings.open.privacy = true;
-            renderSettings();
-          });
-          b.append(
-            el('div', { class: 'field' }, [el('label', { text: 'Ask for Face ID' }), graceSel]),
-            el('button', { class: 'btn block', text: '🔓 Test unlock',
-              onclick: async () => toast(await requestUnlock() ? 'Unlock works ✓' : 'Unlock failed') }),
-            el('div', { class: 'spacer' }),
-            el('button', { class: 'btn block danger', text: 'Turn off app lock',
-              onclick: disableAppLock })
-          );
-        }
       }));
 
     /* ---------- Quick-add ---------- */
@@ -2752,7 +2684,7 @@
     }
   }
 
-  /* ======================= Bank sync (GoCardless file import) ======================= */
+  /* ======================= Statement file import ======================= */
 
   async function ensureCategory(name, icon, color) {
     let cat = DB.state.categories.find((c) => c.name.toLowerCase() === name.toLowerCase());
@@ -2773,15 +2705,7 @@
 
   async function handleBankSyncData(data) {
     if (!data || data.kind !== 'bank-sync' || !Array.isArray(data.transactions)) {
-      return toast('Not a bank sync file — create one with sync/bank_sync.py');
-    }
-    // Remember consent expiry so the app can warn before the 90 days run out.
-    if (data.agreement && data.agreement.expiresAt) {
-      await DB.setMeta('bankConsent', {
-        institutionId: data.institutionId || '',
-        createdAt: data.agreement.createdAt || Date.now(),
-        expiresAt: data.agreement.expiresAt
-      });
+      return toast('Not a statement file — create one with sync/paste_to_sync.py');
     }
     const uuids = [...new Set(data.transactions.map((t) => t.accountUuid).filter(Boolean))];
     const map = Object.assign({}, DB.state.meta.bankAccountMap || {});
@@ -3173,8 +3097,7 @@
       meta: {
         budget: m.budget || null,
         backupReminder: m.backupReminder || null,
-        bankAccountMap: m.bankAccountMap || null,
-        bankConsent: m.bankConsent || null
+        bankAccountMap: m.bankAccountMap || null
       }
     };
   }
@@ -3425,102 +3348,6 @@
     }
   }
 
-  /* ======================= App lock (opt-in, WebAuthn) =======================
-     A passkey/Face ID gate in front of the UI. Honest limitation, stated in
-     Settings: it does NOT encrypt the database — it stops someone casually
-     opening the app, not someone with developer tools. */
-
-  const lockCfg = () => Object.assign({ enabled: false, graceMs: 0 },
-    DB.state.meta.appLock || {});
-  const webauthnSupported = () =>
-    !!(window.PublicKeyCredential && navigator.credentials && location.protocol === 'https:');
-  let unlockedAt = 0;
-
-  async function enableAppLock() {
-    if (!webauthnSupported()) {
-      return toast(location.protocol === 'https:'
-        ? 'This device can’t do biometric unlock'
-        : 'Needs HTTPS — works once the app is hosted');
-    }
-    try {
-      const cred = await navigator.credentials.create({
-        publicKey: {
-          challenge: crypto.getRandomValues(new Uint8Array(32)),
-          rp: { name: 'Expense Tracker' },
-          user: {
-            id: crypto.getRandomValues(new Uint8Array(16)),
-            name: 'expense-tracker', displayName: 'Expense Tracker'
-          },
-          pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
-          authenticatorSelection: {
-            authenticatorAttachment: 'platform', userVerification: 'required',
-            residentKey: 'preferred'
-          },
-          timeout: 60000, attestation: 'none'
-        }
-      });
-      if (!cred) return toast('Setup cancelled');
-      await DB.setMeta('appLock', { enabled: true, graceMs: lockCfg().graceMs,
-        credId: b64(cred.rawId) });
-      unlockedAt = Date.now();
-      toast('App lock enabled');
-      renderSettings();
-    } catch (e) {
-      toast(e && e.name === 'NotAllowedError' ? 'Setup cancelled' : 'Could not enable app lock');
-    }
-  }
-
-  async function disableAppLock() {
-    if (!(await confirmSheet('Turn off the app lock? Anyone with your unlocked phone will be ' +
-      'able to open the app.', 'Turn off', true))) return;
-    await DB.setMeta('appLock', { enabled: false, graceMs: 0 });
-    toast('App lock disabled');
-    renderSettings();
-  }
-
-  async function requestUnlock() {
-    const cfg = lockCfg();
-    try {
-      await navigator.credentials.get({
-        publicKey: {
-          challenge: crypto.getRandomValues(new Uint8Array(32)),
-          allowCredentials: cfg.credId
-            ? [{ type: 'public-key', id: unb64(cfg.credId) }] : [],
-          userVerification: 'required', timeout: 60000
-        }
-      });
-      return true;
-    } catch { return false; }
-  }
-
-  /** Full-screen gate shown until Face ID succeeds. */
-  function showLockScreen() {
-    if ($('#lockscreen')) return;
-    const btn = el('button', { class: 'btn primary', text: '🔓 Unlock' });
-    const overlay = el('div', { id: 'lockscreen', class: 'lockscreen' }, [
-      el('div', { class: 'lock-icon', text: '🔒' }),
-      el('div', { class: 'lock-title', text: 'Expense Tracker' }),
-      el('div', { class: 'lock-sub muted', text: 'Locked — unlock to continue' }),
-      btn
-    ]);
-    document.body.appendChild(overlay);
-    const tryUnlock = async () => {
-      btn.textContent = 'Waiting…';
-      const ok = await requestUnlock();
-      btn.textContent = ok ? 'Unlocked' : '🔓 Try again';
-      if (ok) { unlockedAt = Date.now(); overlay.remove(); }
-    };
-    btn.addEventListener('click', tryUnlock);
-    tryUnlock();
-  }
-
-  function maybeLock() {
-    const cfg = lockCfg();
-    if (!cfg.enabled || !webauthnSupported()) return;
-    if (cfg.graceMs && Date.now() - unlockedAt < cfg.graceMs) return;
-    showLockScreen();
-  }
-
   /* ======================= Export / import ======================= */
 
   async function exportJSON() {
@@ -3661,7 +3488,6 @@
     // Bring settings only where this device has none, remapping account references.
     const m = data.meta || {};
     if (m.budget && !DB.state.meta.budget) await DB.setMeta('budget', m.budget);
-    if (m.bankConsent && !DB.state.meta.bankConsent) await DB.setMeta('bankConsent', m.bankConsent);
     if (m.bankAccountMap) {
       const map = Object.assign({}, DB.state.meta.bankAccountMap || {});
       for (const [uuid, acctId] of Object.entries(m.bankAccountMap)) {
@@ -3993,10 +3819,8 @@
     DB.onWrite = scheduleAutosave;
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') runAutosave('hidden');
-      else maybeLock();
     });
     window.addEventListener('pagehide', () => { runAutosave('close'); });
-    maybeLock();   // opt-in Face ID gate (no-op unless enabled)
     $$('.tabbar [data-tab]').forEach((b) =>
       b.addEventListener('click', () => show(b.dataset.tab)));
     $('#fab').addEventListener('click', () => openTxSheet(null));

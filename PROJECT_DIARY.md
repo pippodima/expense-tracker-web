@@ -524,3 +524,25 @@ Shipped:
 - **App lock (opt-in)**: WebAuthn/Face ID gate with "every open / after 5 min / after 30 min".
   Documented honestly in-UI: it gates the interface, it does *not* encrypt the database.
   Requires HTTPS, so it activates once the app is hosted.
+
+### Chapter 21 — Fix the calendar layout; drop app lock and the GoCardless API (2026-07-28)
+Goal: the calendar rendered badly (screenshot: last column clipped, legend and tiles drawn on
+top of the grid, uncentered on desktop), and the user asked to remove the two features that
+can't work today.
+Root cause of the layout bug: grid items default to `min-width: auto`, so `repeat(7, 1fr)`
+let cell content push the columns past the card — and `aspect-ratio` on stretched grid items
+made the browser mis-measure the grid's height, so siblings overlapped it. The horizontal
+overflow was also what threw off centering on desktop.
+Shipped:
+- `repeat(7, minmax(0, 1fr))` + a fixed `grid-auto-rows: 46px` instead of `aspect-ratio`;
+  cells get `min-width: 0` and `overflow: hidden`; legend separated by a hairline. Verified
+  arithmetically: on a 390 px iPhone the grid is exactly 322 px wide (42.6 px cells, 46 px
+  tall) — fits with no clipping and keeps a ≥40 px tap target. Slightly taller rows ≥480 px.
+- **Removed the app lock** (WebAuthn engine, Privacy section, lock screen, CSS): it needs
+  HTTPS, so it was dead weight on a locally-served app.
+- **Removed the GoCardless API integration**: deleted `sync/bank_sync.py` and
+  `sync/.env.example`, dropped PSD2 consent storage, the Home expiry banner and the Settings
+  consent status; rewrote `sync/README.md` around the converter only. **Kept**
+  `sync/paste_to_sync.py` and the file import (renamed "Import statement file"), since that is
+  the workflow actually in use — it never touched the API.
+- Encrypted backups stay (they work offline everywhere).
