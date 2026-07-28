@@ -4,11 +4,15 @@
 
 const DB = (() => {
   const NAME = 'expense-tracker';
-  const VERSION = 1;
-  const STORES = ['transactions', 'accounts', 'categories', 'rules', 'presets', 'meta'];
+  const VERSION = 2;
+  const STORES = ['transactions', 'accounts', 'categories', 'rules', 'presets', 'meta',
+    'snapshots'];
+  // Loaded into DB.state at startup; 'snapshots' stays on disk (read on demand).
+  const STATE_STORES = ['transactions', 'accounts', 'categories', 'rules', 'presets', 'meta'];
 
   let idb = null;            // IDBDatabase, or null when using the memory fallback
   let memory = null;         // Map<store, Map<id, obj>> fallback
+  let onWrite = null;        // optional callback fired after any mutation
 
   const state = {
     transactions: [],
@@ -78,7 +82,7 @@ const DB = (() => {
       idb = null;
       memory = new Map(STORES.map((s) => [s, new Map()]));
     }
-    for (const s of STORES) {
+    for (const s of STATE_STORES) {
       const rows = idb ? await idbGetAll(s) : [];
       if (s === 'meta') {
         state.meta = {};
@@ -148,12 +152,16 @@ const DB = (() => {
     return !!idb;
   }
 
+  /** Fired after any data mutation, so the app can schedule an auto-snapshot. */
+  function notifyWrite() { if (onWrite) { try { onWrite(); } catch (e) { /* non-fatal */ } } }
+
   async function put(store, obj) {
     if (!obj.id) obj.id = U.uid();
     const list = state[store];
     const i = list.findIndex((o) => o.id === obj.id);
     if (i >= 0) list[i] = obj; else list.push(obj);
     await persistPut(store, [obj]);
+    notifyWrite();
     return obj;
   }
 
@@ -164,17 +172,20 @@ const DB = (() => {
       if (i >= 0) state[store][i] = o; else state[store].push(o);
     }
     await persistPut(store, objs);
+    notifyWrite();
   }
 
   async function del(store, id) {
     state[store] = state[store].filter((o) => o.id !== id);
     await persistDel(store, [id]);
+    notifyWrite();
   }
 
   async function bulkDel(store, ids) {
     const set = new Set(ids);
     state[store] = state[store].filter((o) => !set.has(o.id));
     await persistDel(store, ids);
+    notifyWrite();
   }
 
   async function setMeta(key, value) {
@@ -183,8 +194,34 @@ const DB = (() => {
     else memory.get('meta').set(key, { id: key, value });
   }
 
-  async function wipeAll() {
-    for (const s of STORES) await persistClear(s);
+  /* ---- Snapshots (local auto-backups, kept out of DB.state) ---- */
+
+  async function saveSnapshot(snap) {
+    if (idb) await idbWrite('snapshots', (os) => os.put(snap));
+    else memory.get('snapshots').set(snap.id, snap);
+  }
+
+  async function listSnapshots() {
+    const rows = idb ? await idbGetAll('snapshots') : [...memory.get('snapshots').values()];
+    return rows.sort((a, b) => b.at - a.at);
+  }
+
+  async function deleteSnapshot(id) {
+    if (idb) await idbWrite('snapshots', (os) => os.delete(id));
+    else memory.get('snapshots').delete(id);
+  }
+
+  /** Keep only the newest `keep` snapshots. */
+  async function pruneSnapshots(keep) {
+    const all = await listSnapshots();
+    for (const s of all.slice(keep)) await deleteSnapshot(s.id);
+  }
+
+  async function wipeAll(keepSnapshots) {
+    for (const s of STORES) {
+      if (keepSnapshots && s === 'snapshots') continue;
+      await persistClear(s);
+    }
     state.transactions = [];
     state.accounts = [];
     state.categories = [];
@@ -193,9 +230,10 @@ const DB = (() => {
     state.meta = {};
   }
 
-  /** Replace the entire database with imported backup data. */
+  /** Replace the entire database with imported backup data.
+      Snapshots are kept — restoring a backup shouldn't destroy the safety net. */
   async function replaceAll(data) {
-    await wipeAll();
+    await wipeAll(true);
     if (Array.isArray(data.accounts)) await bulkPut('accounts', data.accounts);
     if (Array.isArray(data.categories)) await bulkPut('categories', data.categories);
     if (Array.isArray(data.transactions)) await bulkPut('transactions', data.transactions);
@@ -301,6 +339,8 @@ const DB = (() => {
     state, init, put, bulkPut, del, bulkDel, setMeta, wipeAll, replaceAll,
     accountBalance, totalBalance, category, account, suggestCategory,
     dupKey, existingDupKeys,
+    saveSnapshot, listSnapshots, deleteSnapshot, pruneSnapshots,
+    set onWrite(fn) { onWrite = fn; },
     get usingFallback() { return !idb; }
   };
 })();

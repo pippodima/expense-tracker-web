@@ -469,3 +469,25 @@ Shipped:
 
 <!-- When we finish new work, add the next "Chapter N — title (date)" entry here, and update
      the "Current state" / "Roadmap" sections above to match. -->
+
+### Chapter 19 — Automatic backups: snapshots + linked file (2026-07-28)
+Goal: "save a backup automatically on every change / when I close the app, overwriting the same
+file" — so nothing has to be saved by hand.
+Platform reality: **no browser on iPhone can silently write to a file** (no File System Access
+API in Safari; downloads need a user gesture and create a new file each time), and iOS has no
+reliable "app closing" hook. So the request is only partly satisfiable — implemented as two
+layers, with the limits stated plainly in the UI:
+- **Snapshots (works everywhere, fully automatic).** A complete copy of the data is written to
+  a new `snapshots` IndexedDB store (schema v2) after every change (15 s debounce) and on
+  `visibilitychange`/`pagehide` — i.e. when the app is backgrounded or closed. Deduped by a
+  32-bit hash so identical states aren't stored twice; newest 12 kept. `DB.onWrite` hook fires
+  on every mutation. Restorable in-app (Settings → Backup & autosave → Restore a snapshot),
+  each snapshot also exportable as a file; a pre-restore snapshot is taken before overwriting.
+- **Linked file (desktop Chromium only).** With the File System Access API, pick a file once
+  and every change silently overwrites *that same file* — exactly the requested behaviour where
+  the platform allows it. Handle persisted in IDB, permission re-grant button after restarts.
+  On iOS/Safari the section explains why it's unavailable instead of hiding the truth.
+- `wipeAll(keepSnapshots)`: restoring a backup keeps the snapshot safety net; Danger-zone delete
+  clears snapshots too (and says so).
+Note: snapshots protect against mistakes (bad import, wrong delete), **not** against a lost
+phone or iOS clearing storage — the UI keeps pushing exported files for that.
