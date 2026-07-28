@@ -11,9 +11,10 @@
     period: { type: 'month', y: now.getFullYear(), m0: now.getMonth() }, // or {type:'range', from, to}
     donutSel: null,
     stats: {
+      view: 'overview',          // overview | calendar | merchants | trips
       range: 'month',            // month | year | all | custom
       y: now.getFullYear(), m0: now.getMonth(),
-      from: '', to: '', donutSel: null
+      from: '', to: '', donutSel: null, merchantQuery: ''
     },
     tx: { q: '', accountId: '', categoryId: '', from: '', to: '', sort: 'date-desc', limit: 100 },
     settings: { open: {}, ruleQuery: '', ruleGroups: {} },
@@ -860,6 +861,24 @@
       root.append(el('div', { class: 'stats-range-label muted', text: rg.label }));
     }
 
+    // View switcher — keeps Stats focused instead of one endless page
+    const vseg = el('div', { class: 'seg seg-4', style: 'margin-bottom:12px' });
+    [['overview', 'Overview'], ['calendar', 'Calendar'],
+     ['merchants', 'Places'], ['trips', 'Trips']].forEach(([val, lbl]) => {
+      vseg.append(el('button', {
+        class: ui.stats.view === val ? 'active' : '', text: lbl,
+        onclick: () => { ui.stats.view = val; renderStats(); }
+      }));
+    });
+    root.append(vseg);
+
+    if (ui.stats.view === 'calendar') return statsCalendar(root);
+    if (ui.stats.view === 'merchants') return statsMerchants(root, rg, txs);
+    if (ui.stats.view === 'trips') return statsTrips(root, rg);
+    statsOverview(root, rg, txs, income, expense, days);
+  }
+
+  function statsOverview(root, rg, txs, income, expense, days) {
     // Summary tiles
     const net = income - expense;
     root.append(el('div', { class: 'tiles' }, [
@@ -885,6 +904,9 @@
       root.append(el('div', { class: 'empty', html: '<span class="big">📊</span>No transactions in this period' }));
       return;
     }
+
+    const cmp = comparisonCard(rg);
+    if (cmp) root.append(cmp);
 
     const buckets = bucketize(txs, rg.from, rg.to, rg.gran);
 
@@ -1003,6 +1025,661 @@
       });
       root.append(listCard);
     }
+  }
+
+  /* ---------------- Calendar heatmap ---------------- */
+
+  function statsCalendar(root) {
+    const y = ui.stats.y, m0 = ui.stats.m0;
+    const r = U.monthRange(y, m0);
+    const exp = DB.state.transactions.filter(
+      (t) => t.type === 'expense' && t.date >= r.from && t.date <= r.to);
+    const byDay = new Map();
+    exp.forEach((t) => byDay.set(t.date, (byDay.get(t.date) || 0) + t.amount));
+    const total = exp.reduce((s, t) => s + t.amount, 0);
+    const D = new Date(y, m0 + 1, 0).getDate();
+    const max = Math.max(0, ...byDay.values());
+    const bud = DB.state.meta.budget;
+    const dailyBase = bud && bud.amount ? bud.amount / D : 0;
+
+    // Month navigation (calendar is inherently monthly)
+    const nav = el('div', { class: 'month-nav' });
+    const prev = el('button', { class: 'mn-btn', text: '‹' });
+    const next = el('button', { class: 'mn-btn', text: '›' });
+    prev.addEventListener('click', () => { statsShiftMonth(-1); });
+    next.addEventListener('click', () => { statsShiftMonth(1); });
+    nav.append(prev, el('div', { class: 'mn-label', text: U.monthLabel(y, m0) }), next);
+    root.append(nav);
+
+    const card = el('div', { class: 'card' }, [
+      el('div', { class: 'card-head' }, [
+        el('h2', { text: 'Spending calendar' }),
+        el('span', { class: 'muted', text: fmtEUR(total) })
+      ])
+    ]);
+
+    // Weekday headers (Monday-first, Italian)
+    const dow = el('div', { class: 'cal-grid cal-dow' });
+    ['L', 'M', 'M', 'G', 'V', 'S', 'D'].forEach((d) => dow.append(el('div', { text: d })));
+    card.append(dow);
+
+    const grid = el('div', { class: 'cal-grid' });
+    const firstDow = (new Date(y, m0, 1).getDay() + 6) % 7;   // 0 = Monday
+    for (let i = 0; i < firstDow; i++) grid.append(el('div', { class: 'cal-cell empty' }));
+    const today = U.todayISO();
+    for (let d = 1; d <= D; d++) {
+      const iso = y + '-' + String(m0 + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+      const v = byDay.get(iso) || 0;
+      // Sequential single-hue ramp: light (near zero) -> dark (heaviest day)
+      const ratio = max > 0 ? v / max : 0;
+      const cell = el('button', {
+        class: 'cal-cell' + (v > 0 ? ' has' : '') +
+          (dailyBase && v > dailyBase ? ' over' : '') + (iso === today ? ' today' : ''),
+        onclick: () => openDayDetail(iso)
+      }, [
+        el('span', { class: 'cal-day', text: String(d) }),
+        v > 0 ? el('span', { class: 'cal-amt', text: v >= 100 ? Math.round(v) : v.toFixed(0) }) : null
+      ]);
+      if (v > 0) {
+        const alpha = 0.15 + ratio * 0.75;
+        cell.style.background = U.colorOf('blue') +
+          Math.round(alpha * 255).toString(16).padStart(2, '0');
+      }
+      grid.append(cell);
+    }
+    card.append(grid);
+    card.append(el('div', { class: 'cal-legend muted' }, [
+      el('span', { text: 'Less' }),
+      el('span', { class: 'cal-scale' }),
+      el('span', { text: 'More' }),
+      dailyBase ? el('span', { class: 'cal-over-key', text: '□ over ' + fmtEUR(dailyBase) }) : null
+    ]));
+    root.append(card);
+
+    // Quick stats for the month
+    const daysWith = byDay.size;
+    const busiest = [...byDay.entries()].sort((a, b) => b[1] - a[1])[0];
+    root.append(el('div', { class: 'tiles' }, [
+      el('div', { class: 'tile' }, [
+        el('div', { class: 't-label', text: 'Days with spending' }),
+        el('div', { class: 't-value', style: 'font-size:1.2rem', text: daysWith + ' / ' + D })
+      ]),
+      el('div', { class: 'tile' }, [
+        el('div', { class: 't-label', text: 'No-spend days' }),
+        el('div', { class: 't-value pos', style: 'font-size:1.2rem', text: String(D - daysWith) })
+      ]),
+      busiest ? el('button', { class: 'tile tile-btn wide', onclick: () => openDayDetail(busiest[0]) }, [
+        el('div', { class: 't-label', text: 'Busiest day ›' }),
+        el('div', { class: 't-value', style: 'font-size:1.2rem',
+          text: U.fmtDate(busiest[0]) + ' · ' + fmtEUR(busiest[1]) })
+      ]) : null
+    ]));
+  }
+
+  function statsShiftMonth(delta) {
+    const d = new Date(ui.stats.y, ui.stats.m0 + delta, 1);
+    ui.stats.y = d.getFullYear(); ui.stats.m0 = d.getMonth();
+    renderStats();
+  }
+
+  function openDayDetail(iso) {
+    const txs = DB.state.transactions.filter((t) => t.date === iso)
+      .sort((a, b) => b.amount - a.amount);
+    const spent = txs.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+    openSheet(U.fmtDate(iso, { weekday: 'long', day: 'numeric', month: 'long' }), (body) => {
+      body.append(el('div', { class: 'cat-detail-head' }, [
+        el('div', { class: 'cat-detail-total', text: fmtEUR(spent) }),
+        el('div', { class: 'muted', text: txs.length + ' transaction' + (txs.length === 1 ? '' : 's') })
+      ]));
+      if (!txs.length) {
+        body.append(el('div', { class: 'empty', html: '<span class="big">🌤</span>No spending — nice' }));
+        return;
+      }
+      txs.forEach((t) => {
+        const c = DB.category(t.categoryId);
+        body.append(el('button', { class: 'cat-tx', onclick: () => openTxSheet(t) }, [
+          el('div', { class: 'cat-tx-main' }, [
+            el('div', { class: 'cat-tx-note', text: t.note || 'Transaction' }),
+            el('div', { class: 'cat-tx-sub', text: c ? c.icon + ' ' + c.name : '—' })
+          ]),
+          el('div', { class: 'cat-tx-amt' + (t.type === 'income' ? ' pos' : ''),
+            text: (t.type === 'income' ? '+ ' : '− ') + fmtEUR(t.amount) })
+        ]));
+      });
+    });
+  }
+
+  /* ---------------- Merchants + subscription radar ---------------- */
+
+  function statsMerchants(root, rg, txs) {
+    root.append(subscriptionCard());
+
+    const expenses = txs.filter((t) => t.type === 'expense');
+    const groups = groupByMerchant(expenses);
+    const card = el('div', { class: 'card' }, [
+      el('div', { class: 'card-head' }, [
+        el('h2', { text: 'Top places' }),
+        el('span', { class: 'muted', text: groups.length + ' total' })
+      ])
+    ]);
+    const search = el('input', { class: 'searchbox', type: 'search',
+      placeholder: 'Search a place…', value: ui.stats.merchantQuery });
+    const listWrap = el('div');
+    const draw = () => {
+      const q = ui.stats.merchantQuery.trim().toLowerCase();
+      const shown = groups.filter((g) => !q || g.label.toLowerCase().includes(q) ||
+        g.key.toLowerCase().includes(q));
+      listWrap.innerHTML = '';
+      if (!shown.length) {
+        listWrap.append(el('div', { class: 'empty', html: '<span class="big">🔍</span>No places match' }));
+        return;
+      }
+      const maxV = shown[0].total;
+      shown.slice(0, 40).forEach((g) => {
+        listWrap.append(el('button', { class: 'catbar', onclick: () => openMerchantDetail(g, rg) }, [
+          el('div', { class: 'catbar-main' }, [
+            el('div', { class: 'catbar-top' }, [
+              el('span', { class: 'catbar-name', text: g.label }),
+              el('span', { class: 'catbar-val', text: fmtEUR(g.total) })
+            ]),
+            el('div', { class: 'catbar-track' }, [
+              el('div', { class: 'catbar-fill', style: 'width:' +
+                (maxV > 0 ? (g.total / maxV) * 100 : 0) + '%;background:' + U.colorOf('blue') })
+            ])
+          ]),
+          el('span', { class: 'catbar-pct', text: g.count + '×' }),
+          el('span', { class: 'catbar-chev', text: '›' })
+        ]));
+      });
+    };
+    let deb;
+    search.addEventListener('input', () => {
+      clearTimeout(deb);
+      deb = setTimeout(() => { ui.stats.merchantQuery = search.value; draw(); }, 120);
+    });
+    draw();
+    card.append(search, listWrap);
+    root.append(card);
+  }
+
+  function openMerchantDetail(g, rg) {
+    const avg = g.count ? g.total / g.count : 0;
+    const biggest = g.txs.reduce((mx, t) => (!mx || t.amount > mx.amount ? t : mx), null);
+    // Lifetime figures, not just the selected period
+    const lifetime = groupByMerchant(
+      DB.state.transactions.filter((t) => t.type === 'expense' && merchantKey(t.note) === g.key));
+    const life = lifetime[0] || { total: 0, count: 0 };
+    openSheet(g.label, (body) => {
+      body.append(el('div', { class: 'cat-detail-head' }, [
+        el('div', { class: 'cat-detail-total', text: fmtEUR(g.total) }),
+        el('div', { class: 'muted', text: (rg.label || 'Period') + ' · ' + g.count +
+          (g.count === 1 ? ' visit' : ' visits') })
+      ]));
+      body.append(el('div', { class: 'cat-detail-stats' }, [
+        el('div', { class: 'tile' }, [
+          el('div', { class: 't-label', text: 'Average' }),
+          el('div', { class: 't-value', style: 'font-size:1.1rem', text: fmtEUR(avg) })
+        ]),
+        biggest ? el('button', { class: 'tile tile-btn', onclick: () => openTxSheet(biggest) }, [
+          el('div', { class: 't-label', text: 'Biggest ›' }),
+          el('div', { class: 't-value', style: 'font-size:1.1rem', text: fmtEUR(biggest.amount) })
+        ]) : null
+      ]));
+      body.append(el('p', { class: 'muted', style: 'margin:10px 0', text:
+        'All time: ' + fmtEUR(life.total) + ' across ' + life.count +
+        (life.count === 1 ? ' visit' : ' visits') }));
+      g.txs.forEach((t) => {
+        body.append(el('button', { class: 'cat-tx', onclick: () => openTxSheet(t) }, [
+          el('div', { class: 'cat-tx-main' }, [
+            el('div', { class: 'cat-tx-note', text: t.note || g.label }),
+            el('div', { class: 'cat-tx-sub', text: U.fmtDate(t.date) })
+          ]),
+          el('div', { class: 'cat-tx-amt', text: '− ' + fmtEUR(t.amount) })
+        ]));
+      });
+    }, { tall: true });
+  }
+
+  /* ---- Subscription radar: suggest, never assume ----
+     A candidate needs >= 3 charges from the same place, spaced ~monthly
+     (median gap 25-35 days) with a stable amount. Nothing counts as a
+     subscription until confirmed; dismissed merchants never come back. */
+
+  const subsMeta = () =>
+    Object.assign({ confirmed: {}, dismissed: [] }, DB.state.meta.subscriptions || {});
+
+  function median(nums) {
+    const a = [...nums].sort((x, y) => x - y);
+    if (!a.length) return 0;
+    const mid = a.length >> 1;
+    return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
+  }
+
+  function detectSubscriptions() {
+    const expenses = DB.state.transactions.filter((t) => t.type === 'expense');
+    const out = [];
+    for (const g of groupByMerchant(expenses)) {
+      // 3+ charges is the confident case; exactly 2 counts only when the amount
+      // is identical to the cent (a strong subscription signal on short history).
+      const amountsAll = g.txs.map((t) => t.amount);
+      const identical = amountsAll.every((a) => Math.abs(a - amountsAll[0]) < 0.005);
+      if (g.count < 2 || (g.count === 2 && !identical)) continue;
+      const dates = g.txs.map((t) => t.date).sort();
+      const gaps = [];
+      for (let i = 1; i < dates.length; i++) {
+        gaps.push((new Date(dates[i]) - new Date(dates[i - 1])) / 86400000);
+      }
+      const gap = median(gaps);
+      if (gap < 25 || gap > 35) continue;                    // monthly cadence only
+      const amounts = g.txs.map((t) => t.amount);
+      const amt = median(amounts);
+      // Amounts must be stable (ignoring a possible price change at the end)
+      const spread = Math.max(...amounts) - Math.min(...amounts);
+      if (amt > 0 && spread / amt > 0.35) continue;
+      const sorted = [...g.txs].sort((a, b) => a.date.localeCompare(b.date));
+      const lastTx = sorted[sorted.length - 1];
+      const prevAmts = sorted.slice(0, -1).map((t) => t.amount);
+      const prevAmt = median(prevAmts);
+      const nextDue = new Date(new Date(lastTx.date).getTime() + gap * 86400000);
+      out.push({
+        key: g.key, label: g.label, amount: lastTx.amount, typical: amt,
+        count: g.count, gap: Math.round(gap), lastDate: lastTx.date,
+        nextDue: isoOf(nextDue), dates,
+        priceChanged: prevAmts.length >= 2 && Math.abs(lastTx.amount - prevAmt) > 0.01
+          ? { from: prevAmt, to: lastTx.amount } : null,
+        missing: (Date.now() - new Date(lastTx.date)) / 86400000 > gap + 10
+      });
+    }
+    return out.sort((a, b) => b.amount - a.amount);
+  }
+
+  function subscriptionCard() {
+    const meta = subsMeta();
+    const found = detectSubscriptions();
+    const confirmed = found.filter((s) => meta.confirmed[s.key]);
+    const suggestions = found.filter((s) => !meta.confirmed[s.key] && !meta.dismissed.includes(s.key));
+    const monthly = confirmed.reduce((s, x) => s + x.amount, 0);
+
+    const card = el('div', { class: 'card' }, [
+      el('div', { class: 'card-head' }, [
+        el('h2', { text: 'Recurring' }),
+        confirmed.length ? el('span', { class: 'muted', text: fmtEUR(monthly) + ' / month' }) : null
+      ])
+    ]);
+
+    if (!confirmed.length && !suggestions.length) {
+      card.append(el('div', { class: 'empty', html:
+        '<span class="big">🔁</span>No monthly patterns spotted yet' }));
+      return card;
+    }
+
+    confirmed.forEach((s) => {
+      const alerts = [];
+      if (s.priceChanged) {
+        alerts.push((s.priceChanged.to > s.priceChanged.from ? '▲ up from ' : '▼ down from ') +
+          fmtEUR(s.priceChanged.from));
+      }
+      if (s.missing) alerts.push('not charged since ' + U.fmtDate(s.lastDate));
+      card.append(el('button', { class: 'sub-row', onclick: () => openSubscriptionSheet(s) }, [
+        el('div', { class: 'sub-main' }, [
+          el('div', { class: 'sub-name', text: s.label }),
+          el('div', { class: 'sub-sub' + (alerts.length ? ' warn' : ''), text: alerts.length
+            ? alerts.join(' · ')
+            : 'next ~' + U.fmtDate(s.nextDue, { day: 'numeric', month: 'short' }) })
+        ]),
+        el('div', { class: 'sub-amt', text: fmtEUR(s.amount) }),
+        el('span', { class: 's-chev', text: '›' })
+      ]));
+    });
+
+    if (suggestions.length) {
+      card.append(el('div', { class: 'sub-title', style: 'margin-top:14px',
+        text: 'Looks recurring — confirm?' }));
+      suggestions.forEach((s) => {
+        card.append(el('div', { class: 'sub-suggest' }, [
+          el('div', { class: 'sub-main' }, [
+            el('div', { class: 'sub-name', text: s.label }),
+            el('div', { class: 'sub-sub', text: fmtEUR(s.amount) + ' · every ~' + s.gap +
+              ' days · ' + s.count + ' charges' })
+          ]),
+          el('button', { class: 'btn small', text: 'Not this', onclick: async () => {
+            const m = subsMeta();
+            m.dismissed = [...new Set([...m.dismissed, s.key])];
+            await DB.setMeta('subscriptions', m);
+            renderStats();
+          } }),
+          el('button', { class: 'btn small primary', text: 'Yes', onclick: async () => {
+            const m = subsMeta();
+            m.confirmed = Object.assign({}, m.confirmed, { [s.key]: { label: s.label } });
+            await DB.setMeta('subscriptions', m);
+            renderStats();
+          } })
+        ]));
+      });
+    }
+    return card;
+  }
+
+  function openSubscriptionSheet(s) {
+    openSheet(s.label, (body, api) => {
+      body.append(el('div', { class: 'cat-detail-head' }, [
+        el('div', { class: 'cat-detail-total', text: fmtEUR(s.amount) }),
+        el('div', { class: 'muted', text: 'every ~' + s.gap + ' days · ' + s.count + ' charges' })
+      ]));
+      if (s.priceChanged) {
+        body.append(el('div', { class: 'banner' }, [
+          el('span', { text: '⚠️', style: 'font-size:1.3rem' }),
+          el('div', { class: 'b-main', html: '<strong>Price changed</strong>' +
+            'From ' + esc(fmtEUR(s.priceChanged.from)) + ' to ' + esc(fmtEUR(s.priceChanged.to)) + '.' })
+        ]));
+      }
+      if (s.missing) {
+        body.append(el('div', { class: 'banner' }, [
+          el('span', { text: '🛑', style: 'font-size:1.3rem' }),
+          el('div', { class: 'b-main', html: '<strong>Possibly cancelled</strong>' +
+            'Expected around ' + esc(U.fmtDate(s.nextDue)) + ' but nothing charged yet.' })
+        ]));
+      }
+      const txs = DB.state.transactions
+        .filter((t) => t.type === 'expense' && merchantKey(t.note) === s.key)
+        .sort((a, b) => b.date.localeCompare(a.date));
+      txs.forEach((t) => {
+        body.append(el('button', { class: 'cat-tx', onclick: () => openTxSheet(t) }, [
+          el('div', { class: 'cat-tx-main' }, [
+            el('div', { class: 'cat-tx-note', text: t.note }),
+            el('div', { class: 'cat-tx-sub', text: U.fmtDate(t.date) })
+          ]),
+          el('div', { class: 'cat-tx-amt', text: '− ' + fmtEUR(t.amount) })
+        ]));
+      });
+      body.append(el('div', { class: 'spacer' }),
+        el('button', { class: 'btn block ghost', text: 'Not a subscription', onclick: async () => {
+          const m = subsMeta();
+          delete m.confirmed[s.key];
+          m.dismissed = [...new Set([...m.dismissed, s.key])];
+          await DB.setMeta('subscriptions', m);
+          api.close(); renderStats();
+        } }));
+    }, { tall: true });
+  }
+
+  /* ---------------- Trips ----------------
+     A trip is a named date range. Detection looks for a burst of places you
+     don't normally go: >= 3 charges over 2-14 consecutive days where most
+     merchants were never seen in the 120 days before. Always a suggestion. */
+
+  const trips = () => (DB.state.meta.trips || []).slice()
+    .sort((a, b) => b.from.localeCompare(a.from));
+
+  function tripTotals(trip) {
+    const txs = DB.state.transactions.filter(
+      (t) => t.date >= trip.from && t.date <= trip.to);
+    const spent = txs.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+    const days = Math.round((new Date(trip.to) - new Date(trip.from)) / 86400000) + 1;
+    return { txs, spent, days, perDay: days ? spent / days : 0 };
+  }
+
+  function detectTrips() {
+    const expenses = DB.state.transactions
+      .filter((t) => t.type === 'expense').sort((a, b) => a.date.localeCompare(b.date));
+    if (expenses.length < 5) return [];
+    const existing = DB.state.meta.trips || [];
+    const dismissed = DB.state.meta.tripsDismissed || [];
+    const seenBefore = (key, date) => expenses.some((t) => {
+      if (t.date >= date) return false;
+      const age = (new Date(date) - new Date(t.date)) / 86400000;
+      return age <= 120 && merchantKey(t.note) === key;
+    });
+
+    // Mark days dominated by unfamiliar places
+    const byDay = new Map();
+    expenses.forEach((t) => {
+      if (!byDay.has(t.date)) byDay.set(t.date, []);
+      byDay.get(t.date).push(t);
+    });
+    const oddDays = [...byDay.entries()].filter(([date, txs]) => {
+      const keys = [...new Set(txs.map((t) => merchantKey(t.note)))];
+      const unfamiliar = keys.filter((k) => !seenBefore(k, date));
+      return keys.length > 0 && unfamiliar.length / keys.length >= 0.6;
+    }).map(([date]) => date).sort();
+
+    // Group consecutive-ish odd days (allowing a 1-day gap) into runs
+    const runs = [];
+    let cur = null;
+    oddDays.forEach((d) => {
+      if (cur && (new Date(d) - new Date(cur.to)) / 86400000 <= 2) cur.to = d;
+      else { cur = { from: d, to: d }; runs.push(cur); }
+    });
+
+    return runs.filter((run) => {
+      const span = (new Date(run.to) - new Date(run.from)) / 86400000 + 1;
+      if (span < 2 || span > 14) return false;
+      const txs = expenses.filter((t) => t.date >= run.from && t.date <= run.to);
+      if (txs.length < 3) return false;
+      const id = run.from + '_' + run.to;
+      if (dismissed.includes(id)) return false;
+      // Skip anything already covered by a saved trip
+      if (existing.some((tr) => run.from <= tr.to && run.to >= tr.from)) return false;
+      return true;
+    }).map((run) => {
+      const txs = expenses.filter((t) => t.date >= run.from && t.date <= run.to);
+      return {
+        id: run.from + '_' + run.to, from: run.from, to: run.to,
+        spent: txs.reduce((s, t) => s + t.amount, 0), count: txs.length,
+        places: [...new Set(txs.map((t) => merchantKey(t.note)))].slice(0, 3)
+      };
+    }).sort((a, b) => b.from.localeCompare(a.from));
+  }
+
+  function statsTrips(root) {
+    const saved = trips();
+    const suggestions = detectTrips();
+
+    if (suggestions.length) {
+      const sCard = el('div', { class: 'card' }, [
+        el('div', { class: 'card-head' }, [el('h2', { text: 'Looks like a trip' })])
+      ]);
+      suggestions.forEach((s) => {
+        sCard.append(el('div', { class: 'sub-suggest' }, [
+          el('div', { class: 'sub-main' }, [
+            el('div', { class: 'sub-name', text:
+              U.fmtDate(s.from, { day: 'numeric', month: 'short' }) + ' – ' +
+              U.fmtDate(s.to, { day: 'numeric', month: 'short' }) }),
+            el('div', { class: 'sub-sub', text:
+              fmtEUR(s.spent) + ' · ' + s.count + ' transactions · ' + s.places.join(', ') })
+          ]),
+          el('button', { class: 'btn small', text: 'No', onclick: async () => {
+            const d = DB.state.meta.tripsDismissed || [];
+            await DB.setMeta('tripsDismissed', [...new Set([...d, s.id])]);
+            renderStats();
+          } }),
+          el('button', { class: 'btn small primary', text: 'Save', onclick: () =>
+            openTripSheet({ from: s.from, to: s.to, name: '' }) })
+        ]));
+      });
+      root.append(sCard);
+    }
+
+    const card = el('div', { class: 'card' }, [
+      el('div', { class: 'card-head' }, [
+        el('h2', { text: 'Trips' }),
+        el('button', { class: 'btn small', text: '+ New', onclick: () => openTripSheet(null) })
+      ])
+    ]);
+    if (!saved.length) {
+      card.append(el('div', { class: 'empty', html:
+        '<span class="big">✈️</span>No trips yet — save one to track a holiday separately' }));
+    } else {
+      saved.forEach((tr) => {
+        const t = tripTotals(tr);
+        card.append(el('button', { class: 'trip-row', onclick: () => openTripDetail(tr) }, [
+          el('span', { class: 'trip-emoji', text: tr.emoji || '✈️' }),
+          el('div', { class: 'trip-main' }, [
+            el('div', { class: 'trip-name', text: tr.name }),
+            el('div', { class: 'trip-sub', text:
+              U.fmtDate(tr.from, { day: 'numeric', month: 'short' }) + ' – ' +
+              U.fmtDate(tr.to, { day: 'numeric', month: 'short', year: 'numeric' }) +
+              ' · ' + t.days + ' days' })
+          ]),
+          el('div', { class: 'trip-amt', text: fmtEUR(t.spent) }),
+          el('span', { class: 's-chev', text: '›' })
+        ]));
+      });
+      const grand = saved.reduce((s, tr) => s + tripTotals(tr).spent, 0);
+      card.append(el('p', { class: 'muted', style: 'margin-top:10px;text-align:right', text:
+        'Total across trips: ' + fmtEUR(grand) }));
+    }
+    root.append(card);
+  }
+
+  function openTripSheet(preset) {
+    const existing = preset && preset.id ? preset : null;
+    const draft = Object.assign({ id: null, name: '', emoji: '✈️', from: U.todayISO(),
+      to: U.todayISO() }, preset || {});
+    openSheet(existing ? 'Edit trip' : 'New trip', (body, api) => {
+      const name = el('input', { type: 'text', placeholder: 'e.g. Lyon', value: draft.name });
+      const from = el('input', { type: 'date', value: draft.from });
+      const to = el('input', { type: 'date', value: draft.to });
+      const emojiWrap = el('div', { class: 'emoji-grid' });
+      const EMOJIS = ['✈️', '🚆', '🏖️', '⛰️', '🏙️', '🎪', '🎿', '🚗'];
+      const drawEmoji = () => {
+        emojiWrap.innerHTML = '';
+        EMOJIS.forEach((e) => emojiWrap.append(el('button', {
+          class: draft.emoji === e ? 'active' : '', text: e,
+          onclick: () => { draft.emoji = e; drawEmoji(); }
+        })));
+      };
+      drawEmoji();
+      const preview = el('p', { class: 'muted', style: 'margin-bottom:12px' });
+      const updatePreview = () => {
+        const t = tripTotals({ from: from.value, to: to.value });
+        preview.textContent = t.txs.length + ' transactions in range · ' + fmtEUR(t.spent);
+      };
+      from.addEventListener('change', updatePreview);
+      to.addEventListener('change', updatePreview);
+      updatePreview();
+
+      body.append(
+        el('div', { class: 'field' }, [el('label', { text: 'Name' }), name]),
+        el('div', { class: 'field' }, [el('label', { text: 'Icon' }), emojiWrap]),
+        el('div', { class: 'field-row' }, [
+          el('div', { class: 'field' }, [el('label', { text: 'From' }), from]),
+          el('div', { class: 'field' }, [el('label', { text: 'To' }), to])
+        ]),
+        preview,
+        el('button', { class: 'btn block primary', text: existing ? 'Save changes' : 'Save trip',
+          onclick: async () => {
+            if (!name.value.trim()) return toast('Name the trip');
+            if (!from.value || !to.value || from.value > to.value) return toast('Invalid dates');
+            const list = (DB.state.meta.trips || []).filter((x) => x.id !== draft.id);
+            list.push({ id: draft.id || U.uid(), name: name.value.trim(), emoji: draft.emoji,
+              from: from.value, to: to.value });
+            await DB.setMeta('trips', list);
+            api.close(); toast('Trip saved'); renderStats();
+          } })
+      );
+      if (existing) {
+        body.append(el('div', { class: 'spacer' }),
+          el('button', { class: 'btn block danger', text: 'Delete trip', onclick: async () => {
+            const list = (DB.state.meta.trips || []).filter((x) => x.id !== draft.id);
+            await DB.setMeta('trips', list);
+            api.close(); toast('Trip deleted'); renderStats();
+          } }));
+      }
+    });
+  }
+
+  function openTripDetail(trip) {
+    const t = tripTotals(trip);
+    const groups = groupByMerchant(t.txs.filter((x) => x.type === 'expense'));
+    openSheet((trip.emoji || '✈️') + ' ' + trip.name, (body) => {
+      body.append(el('div', { class: 'cat-detail-head' }, [
+        el('div', { class: 'cat-detail-total', text: fmtEUR(t.spent) }),
+        el('div', { class: 'muted', text: t.days + ' days · ' + fmtEUR(t.perDay) + ' per day' })
+      ]));
+      body.append(el('button', { class: 'btn block ghost', style: 'margin-bottom:12px',
+        text: 'Edit trip', onclick: () => openTripSheet(trip) }));
+      groups.forEach((g) => {
+        body.append(el('div', { class: 'place-row', style: 'pointer-events:none' }, [
+          el('div', { class: 'place-main' }, [
+            el('div', { class: 'place-name', text: g.label }),
+            el('div', { class: 'place-count', text: g.count + (g.count === 1 ? ' charge' : ' charges') })
+          ]),
+          el('div', { class: 'place-total', text: fmtEUR(g.total) })
+        ]));
+      });
+    }, { tall: true });
+  }
+
+  /* ---------------- Period comparison ---------------- */
+
+  function previousRange(rg) {
+    if (ui.stats.range === 'month') {
+      const d = new Date(ui.stats.y, ui.stats.m0 - 1, 1);
+      const r = U.monthRange(d.getFullYear(), d.getMonth());
+      return { from: r.from, to: r.to, label: U.monthLabel(d.getFullYear(), d.getMonth()) };
+    }
+    if (ui.stats.range === 'year') {
+      const y = ui.stats.y - 1;
+      return { from: y + '-01-01', to: y + '-12-31', label: String(y) };
+    }
+    // Custom / all: shift back by the same span
+    const span = (new Date(rg.to) - new Date(rg.from)) / 86400000 + 1;
+    const to = new Date(new Date(rg.from).getTime() - 86400000);
+    const from = new Date(to.getTime() - (span - 1) * 86400000);
+    return { from: isoOf(from), to: isoOf(to), label: 'previous ' + Math.round(span) + ' days' };
+  }
+
+  function comparisonCard(rg) {
+    const prev = previousRange(rg);
+    const curTx = DB.state.transactions.filter(
+      (t) => t.type === 'expense' && t.date >= rg.from && t.date <= rg.to);
+    const prevTx = DB.state.transactions.filter(
+      (t) => t.type === 'expense' && t.date >= prev.from && t.date <= prev.to);
+    if (!prevTx.length && !curTx.length) return null;
+    const cur = curTx.reduce((s, t) => s + t.amount, 0);
+    const old = prevTx.reduce((s, t) => s + t.amount, 0);
+    const diff = cur - old;
+    const pct = old > 0 ? Math.round((diff / old) * 100) : null;
+
+    const byCat = (list) => {
+      const m = new Map();
+      list.forEach((t) => m.set(t.categoryId, (m.get(t.categoryId) || 0) + t.amount));
+      return m;
+    };
+    const a = byCat(curTx), b = byCat(prevTx);
+    const movers = [...new Set([...a.keys(), ...b.keys()])].map((id) => ({
+      cat: DB.category(id), now: a.get(id) || 0, before: b.get(id) || 0,
+      diff: (a.get(id) || 0) - (b.get(id) || 0)
+    })).filter((m) => Math.abs(m.diff) >= 0.01)
+      .sort((x, y) => Math.abs(y.diff) - Math.abs(x.diff)).slice(0, 5);
+
+    const card = el('div', { class: 'card' }, [
+      el('div', { class: 'card-head' }, [
+        el('h2', { text: 'vs ' + prev.label }),
+        el('span', { class: 'muted', text: fmtEUR(old) + ' → ' + fmtEUR(cur) })
+      ]),
+      el('div', { class: 'cmp-head' }, [
+        el('span', { class: 'cmp-delta ' + (diff > 0 ? 'neg' : diff < 0 ? 'pos' : ''), text:
+          (diff > 0 ? '+' : diff < 0 ? '−' : '') + fmtEUR(Math.abs(diff)) }),
+        el('span', { class: 'muted', text: pct === null ? 'no comparison data'
+          : (diff > 0 ? '+' : '') + pct + '% ' + (diff > 0 ? 'more spent' : 'less spent') })
+      ])
+    ]);
+    if (movers.length) {
+      card.append(el('div', { class: 'sub-title', style: 'margin-top:12px', text: 'Biggest changes' }));
+      movers.forEach((m) => {
+        card.append(el('div', { class: 'cmp-row' }, [
+          el('span', { class: 'cmp-icon', text: m.cat ? m.cat.icon : '❓',
+            style: 'background:' + U.tintOf(m.cat ? m.cat.color : 'blue') }),
+          el('span', { class: 'cmp-name', text: m.cat ? m.cat.name : 'Uncategorized' }),
+          el('span', { class: 'cmp-vals muted', text: fmtEUR(m.before) + ' → ' + fmtEUR(m.now) }),
+          el('span', { class: 'cmp-diff ' + (m.diff > 0 ? 'neg' : 'pos'), text:
+            (m.diff > 0 ? '+' : '−') + fmtEUR(Math.abs(m.diff)) })
+        ]));
+      });
+    }
+    return card;
   }
 
   function legendKey(color, label) {
@@ -2256,6 +2933,24 @@
             draw(); render();
           }
         }));
+
+        // Smart suggestions: same place appearing repeatedly -> categorize the whole group
+        const clusters = groupByMerchant(q).filter((g) => g.count >= 2);
+        if (clusters.length) {
+          body.append(el('div', { class: 'sub-title', text:
+            'Categorize a whole place at once' }));
+          clusters.slice(0, 6).forEach((g) => {
+            body.append(el('button', { class: 'sub-suggest suggest-btn',
+              onclick: () => openBulkAssignSheet(g, draw) }, [
+              el('div', { class: 'sub-main' }, [
+                el('div', { class: 'sub-name', text: g.label }),
+                el('div', { class: 'sub-sub', text: g.count + ' transactions · ' + fmtEUR(g.total) })
+              ]),
+              el('span', { class: 's-chev', text: '›' })
+            ]));
+          });
+          body.append(el('hr', { class: 'sep' }));
+        }
         q.forEach((t) => {
           body.append(el('button', { class: 'tx-row', onclick: () => openAssignSheet(t, draw) }, [
             el('span', { class: 'tx-icon', text: '❓', style: 'background:' + U.tintOf('blue') }),
@@ -2270,6 +2965,54 @@
       };
       draw();
     });
+  }
+
+  /** Assign every transaction from one place at once, optionally teaching a rule. */
+  function openBulkAssignSheet(group, onDone) {
+    openSheet(group.label, (body, api) => {
+      let chosen = null;
+      const chips = el('div', { class: 'chips' });
+      const drawChips = () => {
+        chips.innerHTML = '';
+        DB.state.categories.forEach((c) => {
+          chips.append(el('button', {
+            class: 'chip' + (chosen === c.id ? ' active' : ''),
+            onclick: () => { chosen = c.id; drawChips(); }
+          }, [
+            el('span', { class: 'dot', style: 'background:' + U.colorOf(c.color) }),
+            el('span', { text: c.icon + ' ' + c.name })
+          ]));
+        });
+      };
+      drawChips();
+      const ruleToggle = el('input', { type: 'checkbox' });
+      ruleToggle.checked = true;
+      body.append(
+        el('p', { class: 'muted', style: 'margin-bottom:12px;line-height:1.5', text:
+          group.count + ' transactions from this place, ' + fmtEUR(group.total) + ' in total. ' +
+          'Pick one category for all of them.' }),
+        el('div', { class: 'field' }, [el('label', { text: 'Category' }), chips]),
+        el('label', { style: 'display:flex;gap:8px;align-items:center;font-size:0.85rem;margin-bottom:14px' },
+          [ruleToggle, el('span', { text: 'Also create a rule for “' + group.key + '”' })]),
+        el('button', { class: 'btn block primary', text: 'Assign all ' + group.count,
+          onclick: async () => {
+            if (!chosen) return toast('Pick a category');
+            const upd = group.txs.map((t) => {
+              const o = { ...t, categoryId: chosen };
+              delete o.needsReview;
+              return o;
+            });
+            await DB.bulkPut('transactions', upd);
+            if (ruleToggle.checked) {
+              await DB.put('rules', { id: null, keyword: group.key, categoryId: chosen });
+            }
+            await bumpChanges(upd.length);
+            api.close();
+            toast(upd.length + ' categorized');
+            onDone(); render();
+          } })
+      );
+    }, { tall: true });
   }
 
   function openAssignSheet(t, onDone) {

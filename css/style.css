@@ -715,6 +715,102 @@ h2 { font-size: 1.05rem; }
   border-radius: 6px; padding: 1px 5px; flex: 0 0 auto;
 }
 
+/* ============ Calendar heatmap ============ */
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-dow {
+  margin-bottom: 6px;
+  font-size: 0.68rem; font-weight: 700; color: var(--muted); text-align: center;
+}
+.cal-cell {
+  aspect-ratio: 1;
+  border-radius: 8px;
+  background: var(--surface-2);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 1px; padding: 2px;
+  border: 1.5px solid transparent;
+}
+.cal-cell.empty { background: transparent; }
+.cal-cell.has .cal-day { color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.35); }
+.cal-cell.over { border-color: var(--danger); }
+.cal-cell.today { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cal-day { font-size: 0.72rem; font-weight: 600; color: var(--ink-2); line-height: 1; }
+.cal-amt {
+  font-size: 0.58rem; font-weight: 700; color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.4); line-height: 1;
+}
+.cal-legend {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 12px; font-size: 0.72rem; flex-wrap: wrap;
+}
+.cal-scale {
+  flex: 0 0 70px; height: 8px; border-radius: 4px;
+  background: linear-gradient(to right, #2a78d626, #2a78d6);
+}
+.cal-over-key { margin-left: auto; }
+.tile.wide.tile-btn { grid-column: 1 / -1; }
+
+/* ============ Subscriptions ============ */
+.sub-row, .sub-suggest {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 4px;
+  border-bottom: 1px solid var(--hairline);
+  width: 100%; text-align: left;
+}
+.sub-row:last-child, .sub-suggest:last-child { border-bottom: none; }
+.sub-row:active, .suggest-btn:active { background: var(--surface-2); }
+.sub-main { flex: 1; min-width: 0; }
+.sub-name {
+  font-size: 0.92rem; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sub-sub { font-size: 0.74rem; color: var(--muted); margin-top: 1px; }
+.sub-sub.warn { color: var(--danger); font-weight: 600; }
+.sub-amt { font-weight: 700; font-size: 0.95rem; font-variant-numeric: tabular-nums; }
+.sub-suggest .btn.small { flex: 0 0 auto; }
+
+/* ============ Trips ============ */
+.trip-row {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; text-align: left;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--hairline);
+}
+.trip-row:last-of-type { border-bottom: none; }
+.trip-row:active { background: var(--surface-2); }
+.trip-emoji { font-size: 1.5rem; flex: 0 0 auto; }
+.trip-main { flex: 1; min-width: 0; }
+.trip-name {
+  font-size: 0.95rem; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.trip-sub { font-size: 0.75rem; color: var(--muted); margin-top: 1px; }
+.trip-amt { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* ============ Period comparison ============ */
+.cmp-head { display: flex; align-items: baseline; gap: 10px; }
+.cmp-delta { font-size: 1.9rem; font-weight: 700; letter-spacing: -0.02em; }
+.cmp-delta.pos { color: var(--good); }
+.cmp-delta.neg { color: var(--bad); }
+.cmp-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.cmp-row:last-child { border-bottom: none; }
+.cmp-icon {
+  width: 26px; height: 26px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.85rem; flex: 0 0 auto;
+}
+.cmp-name {
+  flex: 1; min-width: 0; font-size: 0.88rem; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cmp-vals { font-size: 0.72rem; white-space: nowrap; }
+.cmp-diff { font-size: 0.85rem; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cmp-diff.pos { color: var(--good); }
+.cmp-diff.neg { color: var(--bad); }
+
 /* Snapshot list */
 .snap-row {
   display: flex; align-items: center; gap: 8px;
