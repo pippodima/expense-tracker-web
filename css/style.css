@@ -630,6 +630,91 @@ h2 { font-size: 1.05rem; }
   font-size: 0.95rem;
 }
 
+/* ============ Settings: collapsible sections ============ */
+.card.sect { padding: 0; overflow: hidden; }
+.sect-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 15px 16px;
+  min-height: 60px;
+}
+.sect-head:active { background: var(--surface-2); }
+.sect-icon { font-size: 1.25rem; flex: 0 0 auto; width: 26px; text-align: center; }
+.sect-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sect-title { font-size: 0.98rem; font-weight: 600; }
+.sect-sub {
+  font-size: 0.76rem; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sect-chev { color: var(--muted); font-size: 1.05rem; flex: 0 0 auto; }
+.sect-body { display: none; padding: 2px 16px 18px; }
+.sect-body.show { display: block; }
+.sub-title {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted); margin-bottom: 8px;
+}
+
+/* Categories as a compact 2-column grid */
+.cat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cat-cell {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 10px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  text-align: left;
+  min-height: 52px;
+}
+.cat-cell:active { opacity: 0.7; }
+.cat-cell-icon {
+  width: 30px; height: 30px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.95rem; flex: 0 0 auto;
+}
+.cat-cell-main { min-width: 0; display: flex; flex-direction: column; }
+.cat-cell-name {
+  font-size: 0.85rem; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cat-cell-count { font-size: 0.7rem; color: var(--muted); }
+
+/* Rules grouped by category */
+.rule-group { border-bottom: 1px solid var(--hairline); }
+.rule-group:last-child { border-bottom: none; }
+.rule-group-head {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; text-align: left; padding: 10px 4px;
+}
+.rule-group-head:active { background: var(--surface-2); }
+.rule-group-name {
+  flex: 1; min-width: 0; font-size: 0.9rem; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rule-group-count {
+  font-size: 0.72rem; font-weight: 700; color: var(--muted);
+  background: var(--surface-2); border-radius: 10px; padding: 2px 8px;
+}
+.rule-sub { display: none; padding-left: 12px; margin-left: 14px; border-left: 2px solid var(--hairline); }
+.rule-sub.show { display: block; }
+.rule-row {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; text-align: left; padding: 9px 6px;
+  border-bottom: 1px solid var(--hairline);
+}
+.rule-row:last-child { border-bottom: none; }
+.rule-row:active { background: var(--surface-2); }
+.rule-kw {
+  flex: 1; min-width: 0; font-size: 0.86rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rule-badge {
+  font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+  color: var(--accent); border: 1px solid var(--accent);
+  border-radius: 6px; padding: 1px 5px; flex: 0 0 auto;
+}
+
 /* How-to step lists (quick-add setup) */
 .howto-title { font-weight: 700; font-size: 0.92rem; margin-bottom: 10px; }
 .howto-steps {

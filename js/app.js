@@ -16,6 +16,7 @@
       from: '', to: '', donutSel: null
     },
     tx: { q: '', accountId: '', categoryId: '', from: '', to: '', sort: 'date-desc', limit: 100 },
+    settings: { open: {}, ruleQuery: '', ruleGroups: {} },
     sheetZ: 50
   };
 
@@ -1446,168 +1447,243 @@
 
   /* ======================= Settings ======================= */
 
+  /** Collapsible Settings section. Toggling only flips a class (no re-render),
+      so the scroll position and any in-section search state survive. */
+  function settingsSection(key, icon, title, subtitle, build) {
+    const open = !!ui.settings.open[key];
+    const body = el('div', { class: 'sect-body' + (open ? ' show' : '') });
+    const chev = el('span', { class: 'sect-chev', text: open ? '⌄' : '›' });
+    const head = el('button', { class: 'sect-head' }, [
+      el('span', { class: 'sect-icon', text: icon }),
+      el('span', { class: 'sect-main' }, [
+        el('span', { class: 'sect-title', text: title }),
+        subtitle ? el('span', { class: 'sect-sub', text: subtitle }) : null
+      ]),
+      chev
+    ]);
+    head.addEventListener('click', () => {
+      const nowOpen = !body.classList.contains('show');
+      body.classList.toggle('show', nowOpen);
+      chev.textContent = nowOpen ? '⌄' : '›';
+      ui.settings.open[key] = nowOpen;
+    });
+    build(body);
+    return el('div', { class: 'card sect' }, [head, body]);
+  }
+
   function renderSettings() {
     const root = $('#view-settings');
     root.innerHTML = '';
     root.append(el('div', { class: 'view-title' }, [el('h1', { text: 'Settings' })]));
 
-    // Budget
     const bud = DB.state.meta.budget;
-    root.append(el('div', { class: 'card' }, [
-      el('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px' }, [
-        el('h2', { text: 'Monthly budget' }),
-        el('button', { class: 'btn small', text: bud ? 'Edit' : '+ Set', onclick: openBudgetSheet })
-      ]),
-      el('p', { class: 'muted', style: 'line-height:1.5', text: bud
-        ? fmtEUR(bud.amount) + ' / month · ' +
-          (bud.mode === 'daily' ? 'spread per day with rolling balance' : 'monthly cap')
-        : 'Set a monthly spending limit, optionally spread across each day and rebalanced automatically.' })
-    ]));
+    const last = DB.state.meta.lastBackup;
+    const consent = DB.state.meta.bankConsent;
+    const reviewN = reviewQueue().length;
 
-    // Quick-add button (Home / Lock Screen)
+    /* ---------- Budget ---------- */
+    root.append(settingsSection('budget', '💰', 'Monthly budget',
+      bud ? fmtEUR(bud.amount) + ' · ' + (bud.mode === 'daily' ? 'spread per day' : 'monthly cap')
+          : 'Not set',
+      (b) => {
+        b.append(
+          el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:12px', text: bud
+            ? 'Your limit is ' + fmtEUR(bud.amount) + ' per month, ' +
+              (bud.mode === 'daily'
+                ? 'spread across the days left and rebalanced as you spend.'
+                : 'as a single cap for the whole month.')
+            : 'Set a monthly spending limit, optionally spread across each day and rebalanced automatically.' }),
+          el('button', { class: 'btn block primary', text: bud ? 'Edit budget' : 'Set a budget',
+            onclick: openBudgetSheet })
+        );
+      }));
+
+    /* ---------- Categories (compact grid) ---------- */
+    root.append(settingsSection('categories', '🏷', 'Categories',
+      DB.state.categories.length + ' total', (b) => {
+        const grid = el('div', { class: 'cat-grid' });
+        const counts = new Map();
+        DB.state.transactions.forEach((t) =>
+          counts.set(t.categoryId, (counts.get(t.categoryId) || 0) + 1));
+        [...DB.state.categories]
+          .sort((a, b2) => (counts.get(b2.id) || 0) - (counts.get(a.id) || 0))
+          .forEach((c) => {
+            grid.append(el('button', { class: 'cat-cell', onclick: () => openCategorySheet(c) }, [
+              el('span', { class: 'cat-cell-icon', text: c.icon,
+                style: 'background:' + U.tintOf(c.color) }),
+              el('span', { class: 'cat-cell-main' }, [
+                el('span', { class: 'cat-cell-name', text: c.name }),
+                el('span', { class: 'cat-cell-count', text: (counts.get(c.id) || 0) + ' tx' })
+              ])
+            ]));
+          });
+        b.append(grid, el('div', { class: 'spacer' }),
+          el('button', { class: 'btn block', text: '+ Add category',
+            onclick: () => openCategorySheet(null) }));
+      }));
+
+    /* ---------- Rules (searchable, grouped by category) ---------- */
+    root.append(settingsSection('rules', '⚡', 'Category rules',
+      DB.state.rules.length + ' total', (b) => {
+        b.append(el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:10px', text:
+          'When a note or imported description matches, the category is applied automatically.' }));
+
+        const search = el('input', { class: 'searchbox', type: 'search',
+          placeholder: 'Search rules or categories…', value: ui.settings.ruleQuery });
+        const listWrap = el('div');
+
+        const drawRules = () => {
+          const q = ui.settings.ruleQuery.trim().toLowerCase();
+          listWrap.innerHTML = '';
+          const matches = DB.state.rules.filter((r) => {
+            if (!q) return true;
+            const cat = DB.category(r.categoryId);
+            return (r.keyword || '').toLowerCase().includes(q) ||
+              (cat ? cat.name.toLowerCase().includes(q) : false);
+          });
+          if (!matches.length) {
+            listWrap.append(el('div', { class: 'empty', html: DB.state.rules.length
+              ? '<span class="big">🔍</span>No rules match'
+              : '<span class="big">⚡</span>No rules yet' }));
+            return;
+          }
+          // Group by category, biggest group first
+          const groups = new Map();
+          matches.forEach((r) => {
+            if (!groups.has(r.categoryId)) groups.set(r.categoryId, []);
+            groups.get(r.categoryId).push(r);
+          });
+          [...groups.entries()]
+            .sort((a, b2) => b2[1].length - a[1].length)
+            .forEach(([catId, rules]) => {
+              const cat = DB.category(catId);
+              // Searching auto-expands so matches are visible without extra taps.
+              const open = !!q || !!ui.settings.ruleGroups[catId];
+              const sub = el('div', { class: 'rule-sub' + (open ? ' show' : '') });
+              const chev = el('span', { class: 'place-chev', text: open ? '⌄' : '›' });
+              const head = el('button', { class: 'rule-group-head' }, [
+                el('span', { class: 'cat-cell-icon', text: cat ? cat.icon : '❓',
+                  style: 'background:' + U.tintOf(cat ? cat.color : 'blue') }),
+                el('span', { class: 'rule-group-name', text: cat ? cat.name : 'Unknown category' }),
+                el('span', { class: 'rule-group-count', text: String(rules.length) }),
+                chev
+              ]);
+              head.addEventListener('click', () => {
+                const nowOpen = !sub.classList.contains('show');
+                sub.classList.toggle('show', nowOpen);
+                chev.textContent = nowOpen ? '⌄' : '›';
+                ui.settings.ruleGroups[catId] = nowOpen;
+              });
+              rules.forEach((r) => {
+                sub.append(el('button', { class: 'rule-row', onclick: () => openRuleSheet(r) }, [
+                  el('span', { class: 'rule-kw', text: r.keyword }),
+                  r.regex ? el('span', { class: 'rule-badge', text: 'regex' }) : null,
+                  el('span', { class: 's-chev', text: '›' })
+                ]));
+              });
+              listWrap.append(el('div', { class: 'rule-group' }, [head, sub]));
+            });
+        };
+
+        let deb;
+        search.addEventListener('input', () => {
+          clearTimeout(deb);
+          deb = setTimeout(() => { ui.settings.ruleQuery = search.value; drawRules(); }, 120);
+        });
+        drawRules();
+        b.append(search, listWrap, el('div', { class: 'spacer' }),
+          el('button', { class: 'btn block', text: '+ Add rule', onclick: () => openRuleSheet(null) }));
+      }));
+
+    /* ---------- Import (bank sync + CSV) ---------- */
+    root.append(settingsSection('import', '📥', 'Import transactions',
+      reviewN > 0 ? reviewN + ' waiting for a category' : 'Bank sync · CSV', (b) => {
+        b.append(el('div', { class: 'sub-title', text: 'Bank sync (buddybank)' }),
+          el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:10px', text:
+            'Automatic import via GoCardless (free PSD2). The fetch runs on this phone in a-Shell ' +
+            '(see sync/README.md) and produces a file you import here. Re-imports merge — never duplicate.' }),
+          el('button', { class: 'btn block primary', text: '🏦 Import bank sync file',
+            onclick: importBankSync }));
+        if (consent && consent.expiresAt) {
+          const daysLeft = Math.floor((consent.expiresAt - Date.now()) / 86400000);
+          b.append(el('p', { class: 'muted', style: 'margin-top:10px', text:
+            daysLeft < 0 ? '⚠️ Bank consent expired — re-link with bank_sync.py link.'
+              : 'Bank consent valid for ' + daysLeft + ' more day' + (daysLeft === 1 ? '' : 's') +
+                (daysLeft <= 7 ? ' — re-link soon.' : '.') }));
+        }
+        if (reviewN > 0) {
+          b.append(el('div', { class: 'spacer' }),
+            el('button', { class: 'btn block', text: '🏷 Review queue (' + reviewN + ')',
+              onclick: openReviewSheet }));
+        }
+        b.append(el('hr', { class: 'sep' }),
+          el('div', { class: 'sub-title', text: 'Bank CSV' }),
+          el('button', { class: 'btn block', text: '📄 Import bank CSV…', onclick: openCsvWizard }));
+        if (DB.state.presets.length) {
+          b.append(el('div', { class: 'muted', style: 'margin-top:10px', text: 'Saved presets:' }));
+          DB.state.presets.forEach((p) => {
+            b.append(el('div', { class: 'set-row' }, [
+              el('span', { class: 's-main', text: p.name }),
+              el('button', { class: 'btn small ghost', text: 'Delete',
+                onclick: async () => { await DB.del('presets', p.id); renderSettings(); } })
+            ]));
+          });
+        }
+      }));
+
+    /* ---------- Backup & reminders ---------- */
+    root.append(settingsSection('backup', '💾', 'Backup & reminders',
+      last ? 'Last: ' + new Date(last).toLocaleDateString('it-IT') : 'No backup yet', (b) => {
+        b.append(
+          el('p', { class: 'muted', style: 'margin-bottom:12px;line-height:1.5', text:
+            'All data lives only on this device. iOS can clear browser storage — export a JSON ' +
+            'backup regularly and keep it somewhere safe.' }),
+          el('button', { class: 'btn block primary', text: '⬇︎ Export backup (JSON)', onclick: exportJSON }),
+          el('div', { class: 'spacer' }),
+          el('button', { class: 'btn block', text: '⬆︎ Import backup (JSON)', onclick: importJSON }),
+          el('hr', { class: 'sep' })
+        );
+        reminderSettingsBody(b);
+      }));
+
+    /* ---------- Quick-add ---------- */
     const stepList = (items) =>
       el('ol', { class: 'howto-steps' }, items.map((t) => el('li', { html: t })));
-    root.append(el('div', { class: 'card' }, [
-      el('h2', { text: 'Home / Lock Screen quick-add' }),
-      el('p', { class: 'muted', style: 'line-height:1.5', text:
-        'A one-tap “Add expense” button that opens straight into a new transaction. iOS can’t set this up automatically, so pick whichever spot you want:' }),
-      el('button', { class: 'btn block', style: 'margin-top:12px', text: '📋 Copy quick-add link', onclick: copyAddLink }),
+    root.append(settingsSection('quickadd', '📲', 'Home / Lock Screen quick-add',
+      'One-tap “Add expense” button', (b) => {
+        b.append(
+          el('p', { class: 'muted', style: 'line-height:1.5', text:
+            'Opens straight into a new transaction. iOS can’t set this up automatically, so pick the spot you want:' }),
+          el('button', { class: 'btn block', style: 'margin-top:12px', text: '📋 Copy quick-add link',
+            onclick: copyAddLink }),
+          el('hr', { class: 'sep' }),
+          el('div', { class: 'howto' }, [
+            el('div', { class: 'howto-title', text: '🏠 Home Screen — no Shortcut needed' }),
+            stepList([
+              'Copy the link above, then open <strong>Safari</strong> and paste it into the address bar and go.',
+              'Tap the <strong>Share</strong> button, then <strong>Add to Home Screen</strong>.',
+              'Name it “Add expense” and tap <strong>Add</strong>.'
+            ]),
+            el('div', { class: 'muted', style: 'line-height:1.5', text:
+              'That icon opens the app right on the new-transaction form — and shares the same data as your main icon. (Do this in Safari, not inside the installed app.)' })
+          ]),
+          el('hr', { class: 'sep' }),
+          el('div', { class: 'howto' }, [
+            el('div', { class: 'howto-title', text: '🔒 Lock Screen — needs a Shortcut' }),
+            stepList([
+              'Open the <strong>Shortcuts</strong> app → tap <strong>+</strong> → <strong>Add Action</strong> → search <strong>“Open URLs”</strong>.',
+              'Paste the quick-add link into it, then name the shortcut “Add expense”.',
+              'Touch and hold your Lock Screen → <strong>Customise</strong> → add a <strong>Shortcuts</strong> widget → pick “Add expense”.'
+            ]),
+            el('div', { class: 'muted', style: 'line-height:1.5', text:
+              'The Lock Screen only accepts widgets, so this one spot needs a Shortcut wrapping the link. A website can’t create the Shortcut for you — this is the one-time manual setup.' })
+          ])
+        );
+      }));
 
-      el('hr', { class: 'sep' }),
-      el('div', { class: 'howto' }, [
-        el('div', { class: 'howto-title', text: '🏠 Home Screen — no Shortcut needed' }),
-        stepList([
-          'Copy the link above, then open <strong>Safari</strong> and paste it into the address bar and go.',
-          'Tap the <strong>Share</strong> button, then <strong>Add to Home Screen</strong>.',
-          'Name it “Add expense” and tap <strong>Add</strong>.'
-        ]),
-        el('div', { class: 'muted', style: 'line-height:1.5', text:
-          'That icon opens the app right on the new-transaction form — and shares the same data as your main icon. (Do this in Safari, not inside the installed app.)' })
-      ]),
-
-      el('hr', { class: 'sep' }),
-      el('div', { class: 'howto' }, [
-        el('div', { class: 'howto-title', text: '🔒 Lock Screen — needs a Shortcut' }),
-        stepList([
-          'Open the <strong>Shortcuts</strong> app → tap <strong>+</strong> → <strong>Add Action</strong> → search <strong>“Open URLs”</strong>.',
-          'Paste the quick-add link into it, then name the shortcut “Add expense”.',
-          'Touch and hold your Lock Screen → <strong>Customise</strong> → add a <strong>Shortcuts</strong> widget → pick “Add expense”.'
-        ]),
-        el('div', { class: 'muted', style: 'line-height:1.5', text:
-          'The Lock Screen only accepts widgets, so this one spot needs a Shortcut wrapping the link. A website can’t create the Shortcut for you — this is the one-time manual setup.' })
-      ])
-    ]));
-
-    // Backup
-    const last = DB.state.meta.lastBackup;
-    root.append(el('div', { class: 'card' }, [
-      el('h2', { text: 'Backup' }),
-      el('p', {
-        class: 'muted', style: 'margin-bottom:12px;line-height:1.5',
-        text: 'All data lives only on this device. iOS can clear browser storage — export a JSON backup regularly and keep it somewhere safe.'
-          + (last ? ' Last backup: ' + new Date(last).toLocaleDateString('it-IT') + '.' : ' No backup yet.')
-      }),
-      el('button', { class: 'btn block primary', text: '⬇︎ Export backup (JSON)', onclick: exportJSON }),
-      el('div', { class: 'spacer' }),
-      el('button', { class: 'btn block', text: '⬆︎ Import backup (JSON)', onclick: importJSON })
-    ]));
-
-    // Backup reminders
-    root.append(reminderSettingsCard());
-
-    // CSV import
-    const presets = DB.state.presets;
-    const csvCard = el('div', { class: 'card' }, [
-      el('h2', { text: 'Bank CSV import' }),
-      el('button', { class: 'btn block', text: '📄 Import bank CSV…', onclick: openCsvWizard })
-    ]);
-    if (presets.length) {
-      csvCard.append(el('div', { class: 'spacer' }),
-        el('div', { class: 'muted', text: 'Saved bank presets:' }));
-      presets.forEach((p) => {
-        csvCard.append(el('div', { class: 'set-row' }, [
-          el('span', { class: 's-main', text: p.name }),
-          el('button', {
-            class: 'btn small ghost', text: 'Delete',
-            onclick: async () => { await DB.del('presets', p.id); renderSettings(); }
-          })
-        ]));
-      });
-    }
-    root.append(csvCard);
-
-    // Bank sync (GoCardless via the on-phone Python tool)
-    const consent2 = DB.state.meta.bankConsent;
-    const reviewN = reviewQueue().length;
-    const bankCard = el('div', { class: 'card' }, [
-      el('h2', { text: 'Bank sync (buddybank)' }),
-      el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:12px', text:
-        'Automatic import via GoCardless (free PSD2). The fetch runs on this phone in the free ' +
-        'a-Shell app — see sync/README.md — and produces a file you import here. ' +
-        'Duplicates are impossible: every bank transaction has a stable ID and re-imports are merged.' }),
-      el('button', { class: 'btn block primary', text: '🏦 Import bank sync file', onclick: importBankSync })
-    ]);
-    if (consent2 && consent2.expiresAt) {
-      const daysLeft = Math.floor((consent2.expiresAt - Date.now()) / 86400000);
-      bankCard.append(el('p', { class: 'muted', style: 'margin-top:10px', text:
-        daysLeft < 0 ? '⚠️ Bank consent expired — re-link with bank_sync.py link.'
-          : 'Bank consent valid for ' + daysLeft + ' more day' + (daysLeft === 1 ? '' : 's') +
-            (daysLeft <= 7 ? ' — re-link soon.' : '.') }));
-    }
-    if (reviewN > 0) {
-      bankCard.append(
-        el('div', { class: 'spacer' }),
-        el('button', { class: 'btn block', text: '🏷 Review queue (' + reviewN + ')', onclick: openReviewSheet })
-      );
-    }
-    root.append(bankCard);
-
-    // Categories
-    const catCard = el('div', { class: 'card' }, [
-      el('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px' }, [
-        el('h2', { text: 'Categories' }),
-        el('button', { class: 'btn small', text: '+ Add', onclick: () => openCategorySheet(null) })
-      ])
-    ]);
-    DB.state.categories.forEach((c) => {
-      catCard.append(el('button', { class: 'set-row', onclick: () => openCategorySheet(c) }, [
-        el('span', { class: 'tx-icon', text: c.icon, style: 'background:' + U.tintOf(c.color) }),
-        el('span', { class: 's-main', text: c.name }),
-        el('span', { class: 's-chev', text: '›' })
-      ]));
-    });
-    root.append(catCard);
-
-    // Keyword rules
-    const ruleCard = el('div', { class: 'card' }, [
-      el('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px' }, [
-        el('h2', { text: 'Category rules' }),
-        el('button', { class: 'btn small', text: '+ Add', onclick: () => openRuleSheet(null) })
-      ]),
-      el('p', {
-        class: 'muted', style: 'margin-bottom:8px;line-height:1.5',
-        text: 'When a note or imported description contains a keyword, the category is suggested automatically.'
-      })
-    ]);
-    if (DB.state.rules.length === 0) {
-      ruleCard.append(el('div', { class: 'muted', text: 'No rules yet.' }));
-    }
-    DB.state.rules.forEach((r) => {
-      const cat = DB.category(r.categoryId);
-      ruleCard.append(el('button', { class: 'set-row', onclick: () => openRuleSheet(r) }, [
-        el('span', { class: 's-main' }, [
-          el('div', { text: '“' + r.keyword + '”' + (r.regex ? '  ·  regex' : '') }),
-          el('div', { class: 's-sub', text: '→ ' + (cat ? cat.icon + ' ' + cat.name : '?') })
-        ]),
-        el('span', { class: 's-chev', text: '›' })
-      ]));
-    });
-    root.append(ruleCard);
-
-    // Danger zone
-    root.append(el('div', { class: 'card' }, [
-      el('h2', { text: 'Danger zone' }),
-      el('button', {
+    /* ---------- Danger zone ---------- */
+    root.append(settingsSection('danger', '⚠️', 'Danger zone', 'Delete all data', (b) => {
+      b.append(el('button', {
         class: 'btn block danger', text: 'Delete all data',
         onclick: async () => {
           const n = DB.state.transactions.length;
@@ -1618,8 +1694,8 @@
           await DB.wipeAll();
           location.reload();
         }
-      })
-    ]));
+      }));
+    }));
 
     root.append(el('p', {
       class: 'muted', style: 'text-align:center;padding:8px 0 20px',
@@ -1830,14 +1906,17 @@
     });
   }
 
-  function reminderSettingsCard() {
+  /** Fills a container with the backup-reminder controls (used inside the
+      collapsible Backup section). Keeps the section open across re-renders. */
+  function reminderSettingsBody(card) {
     const cfg = reminderCfg();
     const save = async (patch) => {
       await DB.setMeta('backupReminder', Object.assign({}, cfg, patch));
+      ui.settings.open.backup = true;
       renderSettings();
     };
 
-    const card = el('div', { class: 'card' }, [el('h2', { text: 'Backup reminders' })]);
+    card.append(el('div', { class: 'sub-title', text: 'Backup reminders' }));
 
     // Enable toggle
     const toggle = el('input', { type: 'checkbox' });
@@ -1885,7 +1964,6 @@
         el('button', { class: 'btn small ghost', text: 'Preview reminder', onclick: openBackupReminder })
       );
     }
-    return card;
   }
 
   /* ======================= Bank sync (GoCardless file import) ======================= */

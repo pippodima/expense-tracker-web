@@ -449,3 +449,23 @@ Shipped:
 
 <!-- When we finish new work, add the next "Chapter N — title (date)" entry here, and update
      the "Current state" / "Roadmap" sections above to match. -->
+
+### Chapter 18 — Settings reorganized: collapsible, searchable, grouped (2026-07-28)
+Goal: Settings had become one long scroll — 11 categories and 43 rules listed inline, with no
+way to find anything.
+Shipped:
+- **Collapsible sections** (`settingsSection()`): Budget · Categories · Rules · Import ·
+  Backup & reminders · Quick-add · Danger zone. Each header shows an icon, title and a live
+  summary (budget amount, category/rule counts, last backup date, items awaiting review), so
+  the whole page fits on one screen and you open only what you need. Toggling flips a CSS class
+  rather than re-rendering, so scroll position and in-section state survive.
+- **Rules are searchable and grouped by category**: a search box filters by keyword *or*
+  category name, results group under collapsible category headers with counts (43 rules → 10
+  groups), and searching auto-expands matches. Regex rules carry a `regex` badge.
+- **Categories as a compact 2-column grid** with usage counts, sorted by most-used, instead of
+  a long one-per-row list.
+- Consolidation: bank sync + CSV merged into one **Import** section; backup + reminders merged
+  into one section (`reminderSettingsCard()` → `reminderSettingsBody()`).
+
+<!-- When we finish new work, add the next "Chapter N — title (date)" entry here, and update
+     the "Current state" / "Roadmap" sections above to match. -->
