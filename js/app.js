@@ -2377,10 +2377,57 @@
             (last ? ' Last export: ' + new Date(last).toLocaleDateString('it-IT') + '.' : '') }),
           el('button', { class: 'btn block primary', text: '⬇︎ Export backup (JSON)', onclick: exportJSON }),
           el('div', { class: 'spacer' }),
+          el('button', { class: 'btn block', text: '🔐 Export encrypted backup', onclick: exportEncrypted }),
+          el('div', { class: 'spacer' }),
           el('button', { class: 'btn block', text: '⬆︎ Import backup (JSON)', onclick: importJSON }),
+          el('p', { class: 'muted', style: 'margin-top:8px;line-height:1.5', text:
+            'Encrypted files are safe to keep in iCloud or email — but the password is never ' +
+            'stored, so if you forget it the backup is gone for good.' }),
           el('hr', { class: 'sep' })
         );
         reminderSettingsBody(b);
+      }));
+
+    /* ---------- Privacy / app lock ---------- */
+    const lock = lockCfg();
+    root.append(settingsSection('privacy', '🔐', 'Privacy',
+      lock.enabled ? 'App lock on' : 'App lock off', (b) => {
+        b.append(el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:12px', text:
+          'Ask for Face ID / Touch ID before the app opens. It hides the screen from anyone ' +
+          'picking up your phone — but it does not encrypt the database, so it is a lock on ' +
+          'the door, not a safe. Use an encrypted backup for the file itself.' }));
+        if (!webauthnSupported()) {
+          b.append(el('p', { class: 'muted', style: 'line-height:1.5', text:
+            location.protocol === 'https:'
+              ? 'This device or browser doesn’t support biometric unlock.'
+              : 'Biometric unlock needs HTTPS — it becomes available once the app is hosted ' +
+                '(e.g. GitHub Pages), not over a plain local address.' }));
+          return;
+        }
+        if (!lock.enabled) {
+          b.append(el('button', { class: 'btn block primary', text: '🔒 Enable app lock',
+            onclick: enableAppLock }));
+        } else {
+          const graceSel = el('select', {}, [[0, 'Every time the app opens'],
+            [5 * 60000, 'If away for more than 5 minutes'],
+            [30 * 60000, 'If away for more than 30 minutes']].map(([v, l]) =>
+            el('option', { value: String(v), text: l })));
+          graceSel.value = String(lock.graceMs || 0);
+          graceSel.addEventListener('change', async () => {
+            await DB.setMeta('appLock', Object.assign({}, lock,
+              { graceMs: Number(graceSel.value) }));
+            ui.settings.open.privacy = true;
+            renderSettings();
+          });
+          b.append(
+            el('div', { class: 'field' }, [el('label', { text: 'Ask for Face ID' }), graceSel]),
+            el('button', { class: 'btn block', text: '🔓 Test unlock',
+              onclick: async () => toast(await requestUnlock() ? 'Unlock works ✓' : 'Unlock failed') }),
+            el('div', { class: 'spacer' }),
+            el('button', { class: 'btn block danger', text: 'Turn off app lock',
+              onclick: disableAppLock })
+          );
+        }
       }));
 
     /* ---------- Quick-add ---------- */
@@ -3298,6 +3345,182 @@
     }, { tall: true });
   }
 
+  /* ======================= Encrypted backups =======================
+     AES-GCM with a PBKDF2-derived key (WebCrypto, no dependencies). The
+     password never leaves the device and is never stored — lose it and the
+     file is unrecoverable, which the UI says plainly before exporting. */
+
+  const ENC_MAGIC = 'expense-tracker-encrypted';
+  const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+  async function deriveKey(password, salt) {
+    const base = await crypto.subtle.importKey(
+      'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt, iterations: 250000, hash: 'SHA-256' },
+      base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+
+  async function encryptPayload(text, password) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await deriveKey(password, salt);
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key,
+      new TextEncoder().encode(text));
+    return JSON.stringify({
+      app: ENC_MAGIC, v: 1, kdf: 'PBKDF2-SHA256', iterations: 250000,
+      salt: b64(salt), iv: b64(iv), data: b64(ct)
+    }, null, 2);
+  }
+
+  async function decryptPayload(obj, password) {
+    const key = await deriveKey(password, unb64(obj.salt));
+    const plain = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: unb64(obj.iv) }, key, unb64(obj.data));
+    return new TextDecoder().decode(plain);
+  }
+
+  function askPassword(title, message, confirmLabel, needsTwice) {
+    return new Promise((resolve) => {
+      openSheet(title, (body, api) => {
+        const p1 = el('input', { type: 'password', placeholder: 'Password',
+          autocomplete: 'new-password' });
+        const p2 = el('input', { type: 'password', placeholder: 'Repeat password',
+          autocomplete: 'new-password' });
+        let done = false;
+        body.append(
+          el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:14px', text: message }),
+          el('div', { class: 'field' }, [el('label', { text: 'Password' }), p1]),
+          needsTwice ? el('div', { class: 'field' }, [el('label', { text: 'Repeat' }), p2]) : null,
+          el('button', { class: 'btn block primary', text: confirmLabel, onclick: () => {
+            if (!p1.value) return toast('Enter a password');
+            if (needsTwice && p1.value !== p2.value) return toast('Passwords don’t match');
+            if (needsTwice && p1.value.length < 6) return toast('Use at least 6 characters');
+            done = true; const v = p1.value; api.close(); resolve(v);
+          } })
+        );
+        const origClose = api.close;
+        api.close = () => { origClose(); if (!done) resolve(null); };
+        setTimeout(() => p1.focus(), 320);
+      });
+    });
+  }
+
+  async function exportEncrypted() {
+    const pw = await askPassword('Encrypted backup',
+      'The file is scrambled with this password. It is never stored anywhere — if you forget ' +
+      'it, the backup cannot be opened by anyone, including you.', 'Encrypt & export', true);
+    if (!pw) return;
+    try {
+      const enc = await encryptPayload(JSON.stringify(buildBackupPayload()), pw);
+      U.download('expense-tracker-encrypted-' + U.todayISO() + '.json', enc, 'application/json');
+      await DB.setMeta('lastBackup', Date.now());
+      await DB.setMeta('changesSinceBackup', 0);
+      await DB.setMeta('backupSnoozeUntil', 0);
+      toast('Encrypted backup exported ✓');
+      render();
+    } catch (e) {
+      console.warn(e); toast('Encryption failed');
+    }
+  }
+
+  /* ======================= App lock (opt-in, WebAuthn) =======================
+     A passkey/Face ID gate in front of the UI. Honest limitation, stated in
+     Settings: it does NOT encrypt the database — it stops someone casually
+     opening the app, not someone with developer tools. */
+
+  const lockCfg = () => Object.assign({ enabled: false, graceMs: 0 },
+    DB.state.meta.appLock || {});
+  const webauthnSupported = () =>
+    !!(window.PublicKeyCredential && navigator.credentials && location.protocol === 'https:');
+  let unlockedAt = 0;
+
+  async function enableAppLock() {
+    if (!webauthnSupported()) {
+      return toast(location.protocol === 'https:'
+        ? 'This device can’t do biometric unlock'
+        : 'Needs HTTPS — works once the app is hosted');
+    }
+    try {
+      const cred = await navigator.credentials.create({
+        publicKey: {
+          challenge: crypto.getRandomValues(new Uint8Array(32)),
+          rp: { name: 'Expense Tracker' },
+          user: {
+            id: crypto.getRandomValues(new Uint8Array(16)),
+            name: 'expense-tracker', displayName: 'Expense Tracker'
+          },
+          pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+          authenticatorSelection: {
+            authenticatorAttachment: 'platform', userVerification: 'required',
+            residentKey: 'preferred'
+          },
+          timeout: 60000, attestation: 'none'
+        }
+      });
+      if (!cred) return toast('Setup cancelled');
+      await DB.setMeta('appLock', { enabled: true, graceMs: lockCfg().graceMs,
+        credId: b64(cred.rawId) });
+      unlockedAt = Date.now();
+      toast('App lock enabled');
+      renderSettings();
+    } catch (e) {
+      toast(e && e.name === 'NotAllowedError' ? 'Setup cancelled' : 'Could not enable app lock');
+    }
+  }
+
+  async function disableAppLock() {
+    if (!(await confirmSheet('Turn off the app lock? Anyone with your unlocked phone will be ' +
+      'able to open the app.', 'Turn off', true))) return;
+    await DB.setMeta('appLock', { enabled: false, graceMs: 0 });
+    toast('App lock disabled');
+    renderSettings();
+  }
+
+  async function requestUnlock() {
+    const cfg = lockCfg();
+    try {
+      await navigator.credentials.get({
+        publicKey: {
+          challenge: crypto.getRandomValues(new Uint8Array(32)),
+          allowCredentials: cfg.credId
+            ? [{ type: 'public-key', id: unb64(cfg.credId) }] : [],
+          userVerification: 'required', timeout: 60000
+        }
+      });
+      return true;
+    } catch { return false; }
+  }
+
+  /** Full-screen gate shown until Face ID succeeds. */
+  function showLockScreen() {
+    if ($('#lockscreen')) return;
+    const btn = el('button', { class: 'btn primary', text: '🔓 Unlock' });
+    const overlay = el('div', { id: 'lockscreen', class: 'lockscreen' }, [
+      el('div', { class: 'lock-icon', text: '🔒' }),
+      el('div', { class: 'lock-title', text: 'Expense Tracker' }),
+      el('div', { class: 'lock-sub muted', text: 'Locked — unlock to continue' }),
+      btn
+    ]);
+    document.body.appendChild(overlay);
+    const tryUnlock = async () => {
+      btn.textContent = 'Waiting…';
+      const ok = await requestUnlock();
+      btn.textContent = ok ? 'Unlocked' : '🔓 Try again';
+      if (ok) { unlockedAt = Date.now(); overlay.remove(); }
+    };
+    btn.addEventListener('click', tryUnlock);
+    tryUnlock();
+  }
+
+  function maybeLock() {
+    const cfg = lockCfg();
+    if (!cfg.enabled || !webauthnSupported()) return;
+    if (cfg.graceMs && Date.now() - unlockedAt < cfg.graceMs) return;
+    showLockScreen();
+  }
+
   /* ======================= Export / import ======================= */
 
   async function exportJSON() {
@@ -3314,6 +3537,18 @@
     pickFile('.json,application/json', async (text) => {
       let data;
       try { data = JSON.parse(text); } catch { return toast('Not a valid JSON file'); }
+      // Encrypted backup: ask for the password, then continue as normal.
+      if (data && data.app === ENC_MAGIC) {
+        const pw = await askPassword('Encrypted backup',
+          'This file is password-protected. Enter the password you used when exporting it.',
+          'Decrypt', false);
+        if (!pw) return;
+        try {
+          data = JSON.parse(await decryptPayload(data, pw));
+        } catch {
+          return toast('Wrong password, or the file is damaged');
+        }
+      }
       // A bank-sync file also has transactions[]+accounts[] but a different shape —
       // route it to the bank importer instead of storing its raw rows as a backup.
       if (data && data.kind === 'bank-sync') {
@@ -3758,8 +3993,10 @@
     DB.onWrite = scheduleAutosave;
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') runAutosave('hidden');
+      else maybeLock();
     });
     window.addEventListener('pagehide', () => { runAutosave('close'); });
+    maybeLock();   // opt-in Face ID gate (no-op unless enabled)
     $$('.tabbar [data-tab]').forEach((b) =>
       b.addEventListener('click', () => show(b.dataset.tab)));
     $('#fab').addEventListener('click', () => openTxSheet(null));

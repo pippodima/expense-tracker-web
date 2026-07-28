@@ -491,3 +491,36 @@ layers, with the limits stated plainly in the UI:
   clears snapshots too (and says so).
 Note: snapshots protect against mistakes (bad import, wrong delete), **not** against a lost
 phone or iOS clearing storage — the UI keeps pushing exported files for that.
+
+### Chapter 20 — Insight features: heatmap, places, subscriptions, trips, comparison, security (2026-07-28)
+Goal: a batch of "smart" features the user picked from a brainstorm. Decisions taken with them:
+views live behind a **switcher inside Stats** (not a 6th tab), trips are **auto-suggested but
+confirmed**, the app lock is **opt-in**, and the build order was left to me
+(infrastructure → visual views → money features → trips/comparison → security).
+Shipped:
+- **Stats switcher**: Overview / Calendar / Places / Trips. `renderStats()` split into
+  `statsOverview` + the new views.
+- **Calendar heatmap**: month grid shaded by daily spend (single-hue sequential ramp per the
+  dataviz method), over-allowance days outlined, today outlined; tap a day for its
+  transactions; no-spend-days and busiest-day tiles.
+- **Places**: searchable merchant ranking built on `merchantKey()`, per-merchant sheet with
+  period *and* lifetime totals, average and biggest charge.
+- **Subscription radar** — the user's worry was false positives, so nothing is ever applied
+  automatically: a candidate needs ≥3 charges at ~monthly spacing (25–35 day median gap) with
+  stable amounts, or exactly 2 charges when the amount is identical to the cent (short-history
+  case). Suggestions are confirm/dismiss; dismissals stick. Confirmed subs give a monthly
+  total, next-due estimate, **price-change** and **"possibly cancelled"** alerts. On the real
+  data it finds Iliad, Apple, Serenis, Microsoft (€70,98/month) and nothing spurious.
+- **Trips**: detects bursts of unfamiliar merchants (≥3 charges over 2–14 days, ≥60% of places
+  unseen in the prior 120 days) and offers to save them; manual create/edit too. Per-trip
+  totals, per-day average, by-place breakdown.
+- **Comparison card** in Overview: this period vs the previous equivalent, with the five
+  biggest category movers.
+- **Smart rule suggestions** in the review queue: clusters the uncategorized by place and
+  bulk-assigns a whole merchant in one step, optionally teaching the rule.
+- **Encrypted backups**: AES-GCM + PBKDF2-SHA256 (250k iterations) via WebCrypto; import
+  detects the format and asks for the password. Verified: ciphertext hides content, round-trip
+  exact, wrong password rejected.
+- **App lock (opt-in)**: WebAuthn/Face ID gate with "every open / after 5 min / after 30 min".
+  Documented honestly in-UI: it gates the interface, it does *not* encrypt the database.
+  Requires HTTPS, so it activates once the app is hosted.
