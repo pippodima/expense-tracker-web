@@ -2793,8 +2793,8 @@
               onclick: openReviewSheet }));
         }
         b.append(el('hr', { class: 'sep' }),
-          el('div', { class: 'sub-title', text: 'Bank CSV' }),
-          el('button', { class: 'btn block', text: 'Import bank CSV', onclick: openCsvWizard }));
+          el('div', { class: 'sub-title', text: 'Any bank or app export' }),
+          el('button', { class: 'btn block', text: 'Import CSV or JSON', onclick: openCsvWizard }));
         if (DB.state.presets.length) {
           b.append(el('div', { class: 'muted', style: 'margin-top:10px', text: 'Saved presets:' }));
           DB.state.presets.forEach((p) => {
@@ -4154,11 +4154,45 @@
 
   /* ======================= CSV import wizard ======================= */
 
+  /** Import any bank CSV or another app's JSON export: the shape is worked out
+      from the header names *and* the values, then shown for confirmation. */
   function openCsvWizard() {
     if (DB.state.accounts.length === 0) return toast('Create an account first');
-    pickFile('.csv,text/csv,text/plain', (text, filename) => {
-      const { rows } = CSV.parse(text);
-      if (!rows.length || rows[0].length < 2) return toast('Could not read that CSV');
+    pickFile('.csv,.json,.txt,text/csv,application/json,text/plain', (text, filename) => {
+      const trimmed = text.trim();
+      let rows = null;
+
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        let json;
+        try { json = JSON.parse(trimmed); } catch { return toast('That JSON could not be read'); }
+        // Our own formats have dedicated importers
+        if (json && json.kind === 'bank-sync') return handleBankSyncData(json);
+        if (json && json.app === 'expense-tracker') {
+          return toast('That is an app backup — use Backup → Import backup');
+        }
+        const records = Detect.findRecordArray(json);
+        if (!records || !records.length) return toast('No transactions found in that JSON');
+        // Flatten objects to rows so the same mapping UI works for JSON and CSV
+        const keys = [...records.reduce((set, r) => {
+          Object.keys(r || {}).forEach((k) => {
+            if (r[k] === null || typeof r[k] !== 'object') set.add(k);
+          });
+          return set;
+        }, new Set())];
+        rows = [keys, ...records.map((r) => keys.map((k) => (r && r[k] != null ? String(r[k]) : '')))];
+      } else {
+        const parsed = CSV.parse(text);
+        if (!parsed.rows.length) return toast('Could not read that file');
+        rows = parsed.rows;
+        // Drop preamble junk above the real header (many banks add account info)
+        const hdr = Detect.findHeaderRow(rows);
+        if (hdr.headerIndex > 0) rows = rows.slice(hdr.headerIndex);
+        else if (!hdr.hasHeader) rows = [rows[0].map((_, i) => 'Column ' + (i + 1)), ...rows];
+      }
+
+      if (!rows || rows.length < 2 || rows[0].length < 2) {
+        return toast('Could not find columns in that file');
+      }
       openMappingSheet(rows, filename);
     });
   }
@@ -4171,21 +4205,25 @@
       invert: false,
       accountId: DB.state.accounts[0].id
     };
-    // Best-effort auto-detection from header names
-    const header = rows[0].map((h) => h.toLowerCase());
-    header.forEach((h, i) => {
-      if (/data|date/.test(h) && st.dateCol === 0) st.dateCol = i;
-      if (/descr|causale|beneficiar|dettagli|operazione/.test(h)) st.descCol = i;
-      if (/importo|amount|valore/.test(h)) st.amountCol = i;
-      if (/addebit|dare|debit|uscite/.test(h)) { st.debitCol = i; st.mode = st.mode; }
-      if (/accredit|avere|credit|entrate/.test(h)) st.creditCol = i;
-    });
-    if (header.some((h) => /addebit|dare|uscite/.test(h)) &&
-        header.some((h) => /accredit|avere|entrate/.test(h))) {
+    // Detection: header names + what the values actually look like
+    const dataRows = rows.slice(1);
+    const guess = Detect.detectColumns(rows[0], dataRows);
+    if (guess.date) st.dateCol = guess.date.i;
+    if (guess.description) st.descCol = guess.description.i;
+    if (guess.amount) st.amountCol = guess.amount.i;
+    if (guess.pair) {
       st.mode = 'double';
+      st.debitCol = guess.debit.i;
+      st.creditCol = guess.credit.i;
     }
+    // Date convention (DD/MM vs MM/DD vs ISO) and decimal convention
+    const dateVals = dataRows.map((r) => r[st.dateCol]);
+    st.dateFmt = Detect.detectDateFormat(dateVals);
+    const amtVals = dataRows.map((r) => r[st.mode === 'double' ? st.debitCol : st.amountCol]);
+    st.amtFmt = Detect.detectAmountFormat(amtVals);
+    st.detected = guess;
 
-    openSheet('Map CSV columns', (body, api) => {
+    openSheet('Check the columns', (body, api) => {
       const colOptions = (selected) => {
         const sel = el('select');
         rows[0].forEach((h, i) => sel.append(el('option', {
@@ -4288,12 +4326,36 @@
 
         const presetName = el('input', { type: 'text', placeholder: 'e.g. Intesa, Fineco (optional)' });
 
+        const fmtRow = el('div', { class: 'field' }, [el('label', { text: 'Date format' })]);
+        const dfSel = el('select', {}, [
+          el('option', { value: 'dmy', text: 'Day/Month/Year (31/12/2026)' }),
+          el('option', { value: 'mdy', text: 'Month/Day/Year (12/31/2026)' }),
+          el('option', { value: 'iso', text: 'Year-Month-Day (2026-12-31)' }),
+          el('option', { value: 'text', text: 'With month name (3 luglio 2026)' })
+        ]);
+        dfSel.value = (st.dateFmt && st.dateFmt.format) || 'dmy';
+        dfSel.addEventListener('change', () => {
+          st.dateFmt = { format: dfSel.value, ambiguous: false, confidence: 1 };
+          draw();
+        });
+        fmtRow.append(dfSel);
+        if (st.dateFmt && st.dateFmt.ambiguous) {
+          fmtRow.append(el('div', { class: 'note-suggest', text:
+            'Every date fits both readings (no day above 12), so check this is right.' }));
+        }
+
+        const detectedNote = el('p', { class: 'muted', style: 'margin-bottom:10px', text:
+          filename + ' · ' + (rows.length - 1) + ' rows · detected ' +
+          (st.mode === 'double' ? 'debit/credit columns' : 'a single amount column') +
+          (st.amtFmt ? ', ' + (st.amtFmt.format === 'eu' ? '1.234,56' : '1,234.56') + ' numbers' : '') });
+
         body.append(
-          el('p', { class: 'muted', style: 'margin-bottom:10px', text: filename + ' · ' + rows.length + ' rows' }),
+          detectedNote,
           prev,
           el('label', { style: 'display:flex;gap:8px;align-items:center;font-size:0.85rem;margin-bottom:14px' },
             [headerToggle, el('span', { text: 'First row is a header' })]),
-          el('div', { class: 'field' }, [el('label', { text: 'Date column (DD/MM/YYYY)' }), dateSel]),
+          el('div', { class: 'field' }, [el('label', { text: 'Date column' }), dateSel]),
+          fmtRow,
           el('div', { class: 'field' }, [el('label', { text: 'Description column' }), descSel]),
           el('div', { class: 'field' }, [el('label', { text: 'Amount layout' }), modeSeg]),
           amountFields,
@@ -4335,15 +4397,19 @@
     let invalid = 0;
 
     for (const r of dataRows) {
-      const dateISO = CSV.parseDate(r[st.dateCol]);
+      const dateISO = st.dateFmt
+        ? Detect.parseDateSmart(r[st.dateCol], st.dateFmt.format)
+        : CSV.parseDate(r[st.dateCol]);
       const desc = String(r[st.descCol] || '').trim();
       let signed = null;
+      const money = (v) => (st.amtFmt
+        ? Detect.parseAmountSmart(v, st.amtFmt.format) : CSV.parseAmount(v));
       if (st.mode === 'single') {
-        signed = CSV.parseAmount(r[st.amountCol]);
+        signed = money(r[st.amountCol]);
         if (signed != null && st.invert) signed = -signed;
       } else {
-        const deb = CSV.parseAmount(r[st.debitCol]);
-        const cre = CSV.parseAmount(r[st.creditCol]);
+        const deb = money(r[st.debitCol]);
+        const cre = money(r[st.creditCol]);
         if (deb != null && deb !== 0) signed = -Math.abs(deb);
         else if (cre != null && cre !== 0) signed = Math.abs(cre);
       }

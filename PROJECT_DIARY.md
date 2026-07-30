@@ -591,3 +591,30 @@ Shipped:
 - Stated in-UI: this hides numbers on screen, it is not encryption.
 Also documented: **Trips** are a *report*, not a filter — trip spending still counts toward
 monthly totals. An "exclude trips from monthly stats" option remains open.
+
+### Chapter 24 — Trip budgets, category order, universal importer (2026-07-30)
+Decisions taken with the user: only **confirmed subscriptions** are exempt from trip
+exclusion; trips get an **optional budget** (their idea, better than a global toggle);
+categories order **recent-first then frequency**; the importer is **generic auto-detect**.
+Shipped:
+- **Trip accounting.** `tripSettings.excludeFromStats` (default on) keeps trip spending out of
+  monthly charts, tiles, top-spending and comparisons. Separately, a trip with its own
+  `budget` spends from that pot instead of the monthly budget, with its own remaining and
+  daily allowance (Home shows a card while you're on the trip); an *unbudgeted* trip still
+  draws on the monthly budget. Confirmed subscriptions charged mid-trip always count as
+  normal in both. Income and transfers are never reclassified. Verified 12/12 edge cases.
+- **Category order**: last 4 picks first (`meta.recentCategories`), then by usage, applied to
+  every category picker.
+- **Universal importer** (`js/detect.js`). Combines header-name matching in several languages
+  with *content sniffing* (how many values parse as dates/numbers, text length, cardinality),
+  so it works when headers are unknown, unhelpful or absent. Handles: preamble junk above the
+  header, missing header row, `,`/`;`/tab/`|`, EU vs US decimals, debit/credit pairs, ISO
+  datetimes, textual months, 2-digit years, parenthesised negatives, currency symbols, and
+  **JSON** exports (records found even when nested under a wrapper key). DD/MM vs MM/DD is
+  inferred from values >12 and **flagged as ambiguous** when every date fits both, with a
+  format selector in the confirmation step. Verified end-to-end on six formats: Italian bank
+  with preamble + debit/credit, Revolut-style, US bank, headerless CSV, nested app JSON, TSV
+  with Italian month names — 6/6.
+  A bug found by those tests: single-decimal values like `-21.7` were read as EU thousands
+  (→ -217); the decimal heuristic now treats "exactly three digits after the separator" as
+  grouping and anything else as a decimal point.
