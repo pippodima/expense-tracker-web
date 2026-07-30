@@ -216,7 +216,8 @@
     const D = new Date(y, m0 + 1, 0).getDate();
     const r = U.monthRange(y, m0);
     const exp = DB.state.transactions.filter(
-      (t) => t.type === 'expense' && t.date >= r.from && t.date <= r.to);
+      (t) => t.type === 'expense' && t.date >= r.from && t.date <= r.to &&
+        countsInBudget(t));
     const spentMonth = exp.reduce((s, t) => s + t.amount, 0);
     const today = U.todayISO();
     const isCurrent = today >= r.from && today <= r.to;
@@ -245,6 +246,80 @@
     return out;
   }
 
+  /* ======================= Trip accounting =======================
+     A trip is a date range. Two independent behaviours:
+     · Stats: trip spending can be kept out of monthly charts/averages, so a
+       holiday doesn't distort your normal baseline (setting, on by default).
+     · Budget: only when a trip has its own budget does its spending leave the
+       monthly budget — the trip is then tracked against that separate pot.
+     In both cases confirmed subscriptions charged during the trip still count
+     as normal spending: they would have happened whether you travelled or not.
+     Income and transfers are never reclassified. */
+
+  const tripSettings = () =>
+    Object.assign({ excludeFromStats: true }, DB.state.meta.tripSettings || {});
+
+  /** The saved trip covering a date, if any. */
+  function tripForDate(date) {
+    for (const t of (DB.state.meta.trips || [])) {
+      if (date >= t.from && date <= t.to) return t;
+    }
+    return null;
+  }
+
+  /** Confirmed subscriptions keep counting as normal spending during a trip. */
+  function isProtectedRecurring(t) {
+    if (!t.note) return false;
+    const confirmed = (DB.state.meta.subscriptions || {}).confirmed || {};
+    return !!confirmed[merchantKey(t.note)];
+  }
+
+  /** Expense that belongs to a trip and isn't a protected recurring charge. */
+  function tripExpenseOf(t) {
+    if (t.type !== 'expense') return null;
+    if (isProtectedRecurring(t)) return null;
+    return tripForDate(t.date);
+  }
+
+  /** Should this transaction appear in normal monthly stats? */
+  function countsInStats(t) {
+    if (!tripSettings().excludeFromStats) return true;
+    return !tripExpenseOf(t);
+  }
+
+  /** Should this transaction draw down the ordinary monthly budget? */
+  function countsInBudget(t) {
+    const trip = tripExpenseOf(t);
+    return !(trip && trip.budget > 0);   // only a budgeted trip has its own pot
+  }
+
+  /** Trip spending vs its own budget. */
+  function tripBudgetStatus(trip) {
+    if (!trip || !trip.budget) return null;
+    const txs = DB.state.transactions.filter(
+      (t) => t.type === 'expense' && t.date >= trip.from && t.date <= trip.to &&
+        !isProtectedRecurring(t));
+    const spent = txs.reduce((s, t) => s + t.amount, 0);
+    const days = Math.round((new Date(trip.to) - new Date(trip.from)) / 86400000) + 1;
+    const today = U.todayISO();
+    const active = today >= trip.from && today <= trip.to;
+    const dayNo = active
+      ? Math.round((new Date(today) - new Date(trip.from)) / 86400000) + 1 : days;
+    const daysLeft = Math.max(0, days - dayNo + 1);
+    const spentBefore = active ? txs.filter((t) => t.date < today)
+      .reduce((s, t) => s + t.amount, 0) : spent;
+    const spentToday = active ? txs.filter((t) => t.date === today)
+      .reduce((s, t) => s + t.amount, 0) : 0;
+    const todayAllowance = daysLeft > 0 ? (trip.budget - spentBefore) / daysLeft : 0;
+    return {
+      trip, spent, budget: trip.budget, remaining: trip.budget - spent,
+      over: spent > trip.budget, days, daysLeft, active,
+      spentToday, todayAllowance, todayRemaining: todayAllowance - spentToday
+    };
+  }
+
+  const activeTrip = () => tripForDate(U.todayISO());
+
   /* ---- Per-category budgets: { categoryId: monthlyAmount } ---- */
   const catBudgets = () => DB.state.meta.categoryBudgets || {};
 
@@ -254,7 +329,8 @@
     if (!limit) return null;
     const r = range || periodRange();
     const spent = DB.state.transactions
-      .filter((t) => t.type === 'expense' && t.categoryId === catId && inRange(t, r))
+      .filter((t) => t.type === 'expense' && t.categoryId === catId && inRange(t, r) &&
+        countsInBudget(t))
       .reduce((s, t) => s + t.amount, 0);
     return { limit, spent, remaining: limit - spent,
       pct: limit > 0 ? Math.min(100, (spent / limit) * 100) : 0, over: spent > limit };
@@ -432,7 +508,7 @@
     const root = $('#view-dashboard');
     root.innerHTML = '';
     const r = periodRange();
-    const txs = DB.state.transactions.filter((t) => inRange(t, r));
+    const txs = DB.state.transactions.filter((t) => inRange(t, r) && countsInStats(t));
     const income = txs.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
     const expense = txs.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
 
@@ -518,6 +594,30 @@
         heroDaily ? el('span', { text: 'net ' + fmtEUR(net) }) : null
       ])
     ]));
+
+    // On a trip right now? Show its own pot before the monthly budget.
+    const trip = activeTrip();
+    const tbs = tripBudgetStatus(trip);
+    if (tbs) {
+      const rem = tbs.todayRemaining;
+      root.append(el('div', { class: 'card' }, [
+        el('div', { class: 'card-head' }, [
+          el('h2', { text: (trip.emoji || '✈️') + ' ' + trip.name }),
+          el('button', { class: 'btn small ghost', text: 'Details',
+            onclick: () => openTripDetail(trip) })
+        ]),
+        el('div', { class: 'budget-today' }, [
+          el('div', { class: 'bt-label', text: rem >= 0 ? 'Left for today on this trip'
+            : 'Over the trip’s daily pace' }),
+          el('div', { class: 'bt-value ' + (rem >= 0 ? 'pos' : 'neg'), text: fmtEUR(rem) }),
+          el('div', { class: 'muted', text: tbs.daysLeft +
+            (tbs.daysLeft === 1 ? ' day left' : ' days left') })
+        ]),
+        meter(tbs.spent, tbs.budget),
+        el('div', { class: 'muted', style: 'margin-top:6px', text:
+          fmtEUR(tbs.spent) + ' of ' + fmtEUR(tbs.budget) + ' · not counted in your monthly budget' })
+      ]));
+    }
 
     if (bs) root.append(budgetCard(bs, heroDaily));
 
@@ -1034,7 +1134,8 @@
     const root = $('#view-stats');
     root.innerHTML = '';
     const rg = statsRange();
-    const txs = DB.state.transactions.filter((t) => t.date >= rg.from && t.date <= rg.to);
+    const txs = DB.state.transactions.filter(
+      (t) => t.date >= rg.from && t.date <= rg.to && countsInStats(t));
     const income = txs.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
     const expense = txs.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
     const days = (new Date(rg.to) - new Date(rg.from)) / 86400000 + 1;
@@ -1708,7 +1809,11 @@
               U.fmtDate(tr.to, { day: 'numeric', month: 'short', year: 'numeric' }) +
               ' · ' + t.days + ' days' })
           ]),
-          el('div', { class: 'trip-amt', text: fmtEUR(t.spent) }),
+          el('div', { class: 'trip-right' }, [
+            el('div', { class: 'trip-amt', text: fmtEUR(t.spent) }),
+            tr.budget ? el('div', { class: 'trip-bud ' +
+              (t.spent > tr.budget ? 'neg' : 'muted'), text: 'of ' + fmtEUR(tr.budget) }) : null
+          ]),
           el('span', { class: 's-chev', text: '›' })
         ]));
       });
@@ -1737,6 +1842,8 @@
         })));
       };
       drawEmoji();
+      const budget = el('input', { type: 'text', inputmode: 'decimal', placeholder: 'No budget',
+        value: draft.budget ? String(draft.budget).replace('.', ',') : '' });
       const preview = el('p', { class: 'muted', style: 'margin-bottom:12px' });
       const updatePreview = () => {
         const t = tripTotals({ from: from.value, to: to.value });
@@ -1753,14 +1860,22 @@
           el('div', { class: 'field' }, [el('label', { text: 'From' }), from]),
           el('div', { class: 'field' }, [el('label', { text: 'To' }), to])
         ]),
+        el('div', { class: 'field' }, [
+          el('label', { text: 'Trip budget (€, optional)' }), budget,
+          el('div', { class: 'note-suggest', text:
+            'With a budget set, this trip spends from its own pot instead of your monthly ' +
+            'budget. Subscriptions charged during the trip still count as normal.' })
+        ]),
         preview,
         el('button', { class: 'btn block primary', text: existing ? 'Save changes' : 'Save trip',
           onclick: async () => {
             if (!name.value.trim()) return toast('Name the trip');
             if (!from.value || !to.value || from.value > to.value) return toast('Invalid dates');
             const list = (DB.state.meta.trips || []).filter((x) => x.id !== draft.id);
+            const bud = CSV.parseAmount(budget.value);
             list.push({ id: draft.id || U.uid(), name: name.value.trim(), emoji: draft.emoji,
-              from: from.value, to: to.value });
+              from: from.value, to: to.value,
+              budget: bud != null && bud > 0 ? Math.round(bud * 100) / 100 : null });
             await DB.setMeta('trips', list);
             api.close(); toast('Trip saved'); renderStats();
           } })
@@ -1784,6 +1899,21 @@
         el('div', { class: 'cat-detail-total', text: fmtEUR(t.spent) }),
         el('div', { class: 'muted', text: t.days + ' days · ' + fmtEUR(t.perDay) + ' per day' })
       ]));
+      const tb = tripBudgetStatus(trip);
+      if (tb) {
+        body.append(el('div', { class: 'catbudget' }, [
+          el('div', { class: 'budget-line' }, [
+            el('span', { text: 'Trip budget' }),
+            el('span', { class: tb.over ? 'neg' : 'pos',
+              text: fmtEUR(tb.spent) + ' / ' + fmtEUR(tb.budget) })
+          ]),
+          meter(tb.spent, tb.budget),
+          el('div', { class: 'muted', style: 'margin-top:6px', text: tb.over
+            ? fmtEUR(-tb.remaining) + ' over'
+            : fmtEUR(tb.remaining) + ' left' + (tb.active && tb.daysLeft
+                ? ' · ' + fmtEUR(tb.todayAllowance) + ' for today' : '') })
+        ]));
+      }
       body.append(el('button', { class: 'btn block ghost', style: 'margin-bottom:12px',
         text: 'Edit trip', onclick: () => openTripSheet(trip) }));
       groups.forEach((g) => {
@@ -1820,9 +1950,9 @@
   function comparisonCard(rg) {
     const prev = previousRange(rg);
     const curTx = DB.state.transactions.filter(
-      (t) => t.type === 'expense' && t.date >= rg.from && t.date <= rg.to);
+      (t) => t.type === 'expense' && t.date >= rg.from && t.date <= rg.to && countsInStats(t));
     const prevTx = DB.state.transactions.filter(
-      (t) => t.type === 'expense' && t.date >= prev.from && t.date <= prev.to);
+      (t) => t.type === 'expense' && t.date >= prev.from && t.date <= prev.to && countsInStats(t));
     if (!prevTx.length && !curTx.length) return null;
     const cur = curTx.reduce((s, t) => s + t.amount, 0);
     const old = prevTx.reduce((s, t) => s + t.amount, 0);
@@ -2145,6 +2275,26 @@
 
   /* ======================= Transaction sheet ======================= */
 
+  /** Category order for pickers: the last few you chose, then the most used.
+      Keeps today's context at your fingertips without reshuffling constantly. */
+  function orderedCategories() {
+    const recent = DB.state.meta.recentCategories || [];
+    const counts = new Map();
+    DB.state.transactions.forEach((t) => {
+      if (t.categoryId) counts.set(t.categoryId, (counts.get(t.categoryId) || 0) + 1);
+    });
+    const rest = DB.state.categories
+      .filter((c) => !recent.includes(c.id))
+      .sort((a, b) => (counts.get(b.id) || 0) - (counts.get(a.id) || 0));
+    const head = recent.map((id) => DB.state.categories.find((c) => c.id === id)).filter(Boolean);
+    return [...head, ...rest];
+  }
+
+  async function rememberCategoryPick(catId) {
+    const prev = (DB.state.meta.recentCategories || []).filter((id) => id !== catId);
+    await DB.setMeta('recentCategories', [catId, ...prev].slice(0, 4));
+  }
+
   /** Most-repeated recent expenses, for the one-tap chips. */
   function frequentTransactions(limit) {
     const cutoff = new Date(Date.now() - 120 * 86400000).toISOString().slice(0, 10);
@@ -2247,11 +2397,11 @@
         });
       };
 
-      // Category chips
+      // Category chips — recently picked first, then most used
       const catChips = el('div', { class: 'chips scroll' });
       const drawCats = () => {
         catChips.innerHTML = '';
-        DB.state.categories.forEach((c) => {
+        orderedCategories().forEach((c) => {
           catChips.append(el('button', {
             class: 'chip' + (draft.categoryId === c.id ? ' active' : ''),
             onclick: () => { draft.categoryId = c.id; manualCat = true; suggest.textContent = ''; drawCats(); }
@@ -2301,6 +2451,7 @@
           }
           draft.amount = Math.round(val * 100) / 100;
           await DB.put('transactions', draft);
+          if (draft.categoryId) await rememberCategoryPick(draft.categoryId);
           await bumpChanges(1);
           api.close();
           toast(existing ? 'Saved' : 'Added ' + fmtEUR(draft.amount));
@@ -2734,6 +2885,36 @@
           el('hr', { class: 'sep' })
         );
         reminderSettingsBody(b);
+      }));
+
+    /* ---------- Trips ---------- */
+    const ts = tripSettings();
+    const tripCount = (DB.state.meta.trips || []).length;
+    root.append(settingsSection('trips', '✈️', 'Trips',
+      tripCount + (tripCount === 1 ? ' saved' : ' saved'), (b) => {
+        const tg = el('input', { type: 'checkbox' });
+        tg.checked = ts.excludeFromStats;
+        tg.addEventListener('change', async () => {
+          await DB.setMeta('tripSettings', Object.assign({}, ts, { excludeFromStats: tg.checked }));
+          ui.settings.open.trips = true; render();
+        });
+        b.append(
+          el('label', { class: 'switch-row' }, [
+            el('div', { class: 's-main' }, [
+              el('div', { text: 'Keep trips out of monthly stats' }),
+              el('div', { class: 's-sub', text:
+                'Charts and averages ignore trip spending, so a holiday doesn’t skew your baseline.' })
+            ]),
+            tg
+          ]),
+          el('p', { class: 'muted', style: 'line-height:1.5;margin-top:10px', text:
+            'Confirmed subscriptions charged during a trip always count as normal spending. ' +
+            'Give a trip its own budget (in the Trips tab) and its spending also leaves your ' +
+            'monthly budget — otherwise the money still comes out of it.' }),
+          el('div', { class: 'spacer' }),
+          el('button', { class: 'btn block', text: 'Open trips',
+            onclick: () => { ui.stats.view = 'trips'; show('stats'); } })
+        );
       }));
 
     /* ---------- Private mode ---------- */
@@ -3375,7 +3556,7 @@
       const chips = el('div', { class: 'chips' });
       const drawChips = () => {
         chips.innerHTML = '';
-        DB.state.categories.forEach((c) => {
+        orderedCategories().forEach((c) => {
           chips.append(el('button', {
             class: 'chip' + (chosen === c.id ? ' active' : ''),
             onclick: () => { chosen = c.id; drawChips(); }
@@ -3422,7 +3603,7 @@
       const chips = el('div', { class: 'chips' });
       const drawChips = () => {
         chips.innerHTML = '';
-        DB.state.categories.forEach((c) => {
+        orderedCategories().forEach((c) => {
           chips.append(el('button', {
             class: 'chip' + (chosen === c.id ? ' active' : ''),
             onclick: () => { chosen = c.id; drawChips(); }

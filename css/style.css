@@ -1189,3 +1189,8 @@ hr.sep { border: none; border-top: 1px solid var(--hairline); margin: 12px 0; }
 }
 /* Tap to peek */
 .privacy .peek, .privacy-all .peek { filter: none; }
+
+/* Trip budget in the trips list */
+.trip-right { text-align: right; flex: 0 0 auto; }
+.trip-bud { font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+.trip-bud.neg { color: var(--bad); }
