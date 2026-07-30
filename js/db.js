@@ -281,11 +281,19 @@ const DB = (() => {
 
   /* ---- Domain helpers ---- */
 
+  /** Current balance = starting balance ± its transactions. Transfers move money
+      between accounts: they leave `accountId` and land in `toAccountId`, and are
+      never counted as income or expense anywhere. */
   function accountBalance(accountId) {
     let bal = 0;
     const acct = state.accounts.find((a) => a.id === accountId);
     if (acct) bal = Number(acct.startingBalance) || 0;
     for (const t of state.transactions) {
+      if (t.type === 'transfer') {
+        if (t.accountId === accountId) bal -= t.amount;
+        else if (t.toAccountId === accountId) bal += t.amount;
+        continue;
+      }
       if (t.accountId !== accountId) continue;
       bal += t.type === 'income' ? t.amount : -t.amount;
     }

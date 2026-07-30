@@ -21,6 +21,9 @@
     sheetZ: 50
   };
 
+  /** Destructive actions are immediate + undoable instead of confirm-gated. */
+  const toastUndo = (msg, undo) => U.toastAction(msg, 'Undo', undo);
+
   const ACCOUNT_TYPES = [
     ['checking', 'Checking', '🏦'],
     ['savings', 'Savings', '🐖'],
@@ -664,6 +667,16 @@
     for (const t of DB.state.transactions) {
       const o = { ...t };
       let changed = false;
+      if (o.type === 'transfer') {
+        // Transfers legitimately have no category; just ensure both ends exist.
+        if (!validAcct.has(o.accountId)) { o.accountId = fallbackAcct; changed = true; }
+        if (!validAcct.has(o.toAccountId)) {
+          const other = DB.state.accounts.find((a) => a.id !== o.accountId);
+          o.toAccountId = other ? other.id : fallbackAcct; changed = true;
+        }
+        if (changed) fixes.push(o);
+        continue;
+      }
       if (o.type !== 'income' && o.type !== 'expense') {
         o.type = Number(o.amount) < 0 ? 'expense' : 'income'; changed = true;
       }
@@ -1779,7 +1792,8 @@
       if (groupByDay && t.date !== curDay) {
         curDay = t.date;
         const dayTxs = list.filter((x) => x.date === curDay);
-        dayTotal = dayTxs.reduce((s, x) => s + (x.type === 'income' ? x.amount : -x.amount), 0);
+        dayTotal = dayTxs.reduce((s, x) => s +
+          (x.type === 'transfer' ? 0 : x.type === 'income' ? x.amount : -x.amount), 0);
         wrap.append(el('div', { class: 'tx-day' }, [
           el('span', { text: U.fmtDate(t.date, { weekday: 'long', day: 'numeric', month: 'long' }) }),
           el('span', { text: fmtEUR(dayTotal) })
@@ -1798,29 +1812,39 @@
   function txRow(t) {
     const cat = DB.category(t.categoryId);
     const acct = DB.account(t.accountId);
-    const sign = t.type === 'income' ? '+' : '−';
+    const isTrf = t.type === 'transfer';
+    const toAcct = isTrf ? DB.account(t.toAccountId) : null;
     const row = el('div', { class: 'tx-row' }, [
       el('span', {
-        class: 'tx-icon', text: cat ? cat.icon : '❓',
-        style: 'background:' + U.tintOf(cat ? cat.color : 'blue')
+        class: 'tx-icon', text: isTrf ? '⇄' : (cat ? cat.icon : '❓'),
+        style: 'background:' + U.tintOf(isTrf ? 'blue' : (cat ? cat.color : 'blue'))
       }),
       el('span', { class: 'tx-main' }, [
-        el('span', { class: 'tx-title', text: t.note || (cat ? cat.name : 'Transaction') }),
-        el('span', { class: 'tx-sub', text: (cat ? cat.name : '—') + ' · ' + (acct ? acct.name : '—') })
+        el('span', { class: 'tx-title', text: t.note ||
+          (isTrf ? 'Transfer' : (cat ? cat.name : 'Transaction')) }),
+        el('span', { class: 'tx-sub', text: isTrf
+          ? (acct ? acct.name : '—') + ' → ' + (toAcct ? toAcct.name : '—')
+          : (cat ? cat.name : '—') + ' · ' + (acct ? acct.name : '—') })
       ]),
       el('span', {
-        class: 'tx-amt' + (t.type === 'income' ? ' pos' : ''),
-        text: sign + ' ' + fmtEUR(t.amount)
+        class: 'tx-amt' + (t.type === 'income' ? ' pos' : isTrf ? ' neutral' : ''),
+        text: (isTrf ? '⇄ ' : t.type === 'income' ? '+ ' : '− ') + fmtEUR(t.amount)
       })
     ]);
     return makeSwipeable(row, {
       onTap: () => openTxSheet(t),
       onEdit: () => openTxSheet(t),
       onDelete: async () => {
-        if (!(await confirmSheet('Delete this transaction?', 'Delete', true))) return;
+        // Immediate + undoable, rather than a modal to confirm a gesture
+        const snapshot = { ...t };
         await DB.del('transactions', t.id);
         await bumpChanges(1);
-        toast('Deleted'); render();
+        render();
+        toastUndo('Deleted', async () => {
+          await DB.put('transactions', snapshot);
+          await bumpChanges(1);
+          render();
+        });
       }
     });
   }
@@ -1887,6 +1911,23 @@
 
   /* ======================= Transaction sheet ======================= */
 
+  /** Most-repeated recent expenses, for the one-tap chips. */
+  function frequentTransactions(limit) {
+    const cutoff = new Date(Date.now() - 120 * 86400000).toISOString().slice(0, 10);
+    const seen = new Map();
+    for (const t of DB.state.transactions) {
+      if (t.type !== 'expense' || t.date < cutoff || !t.note) continue;
+      const key = merchantKey(t.note) + '|' + t.amount.toFixed(2);
+      const hit = seen.get(key);
+      if (hit) { hit.count++; if (t.date > hit.last) hit.last = t.date; }
+      else seen.set(key, { count: 1, last: t.date, tx: t });
+    }
+    return [...seen.values()]
+      .filter((x) => x.count >= 2)
+      .sort((a, b) => b.count - a.count || b.last.localeCompare(a.last))
+      .slice(0, limit || 5);
+  }
+
   function openTxSheet(existing) {
     if (DB.state.accounts.length === 0) return toast('Create an account first');
     const draft = existing ? { ...existing } : {
@@ -1896,18 +1937,35 @@
     let manualCat = !!existing; // don't auto-override an existing/manual choice
 
     openSheet(existing ? 'Edit transaction' : 'New transaction', (body, api) => {
-      // Type toggle
+      // Type toggle — transfers move money between accounts, so they are neither
+      // income nor expense and never appear in spending stats.
       const seg = el('div', { class: 'seg' });
       const bExp = el('button', { text: 'Expense' });
       const bInc = el('button', { text: 'Income' });
+      const bTrf = el('button', { text: 'Transfer' });
       const syncSeg = () => {
         bExp.className = draft.type === 'expense' ? 'active exp' : '';
         bInc.className = draft.type === 'income' ? 'active inc' : '';
+        bTrf.className = draft.type === 'transfer' ? 'active' : '';
+        const isTrf = draft.type === 'transfer';
+        catField.style.display = isTrf ? 'none' : '';
+        noteField.querySelector('label').textContent = isTrf ? 'Note (optional)' : 'Note';
+        acctLabel.textContent = isTrf ? 'From account' : 'Account';
+        toField.style.display = isTrf ? '' : 'none';
+        if (isTrf) drawToAccts();
       };
       bExp.addEventListener('click', () => { draft.type = 'expense'; syncSeg(); });
       bInc.addEventListener('click', () => { draft.type = 'income'; syncSeg(); });
-      syncSeg();
-      seg.append(bExp, bInc);
+      bTrf.addEventListener('click', () => {
+        draft.type = 'transfer';
+        if (!draft.toAccountId || draft.toAccountId === draft.accountId) {
+          const other = DB.state.accounts.find((a) => a.id !== draft.accountId);
+          draft.toAccountId = other ? other.id : null;
+        }
+        syncSeg();
+      });
+      if (DB.state.accounts.length > 1) seg.append(bExp, bInc, bTrf);
+      else seg.append(bExp, bInc);
 
       // Amount
       const amount = el('input', {
@@ -1922,18 +1980,38 @@
       const date = el('input', { type: 'date', value: draft.date });
       date.addEventListener('change', () => { draft.date = date.value; });
 
-      // Account chips
+      // Account chips (source account; also the "from" side of a transfer)
       const acctChips = el('div', { class: 'chips scroll' });
       const drawAccts = () => {
         acctChips.innerHTML = '';
         DB.state.accounts.forEach((a) => {
           acctChips.append(el('button', {
             class: 'chip' + (draft.accountId === a.id ? ' active' : ''),
-            onclick: () => { draft.accountId = a.id; drawAccts(); }
+            onclick: () => {
+              draft.accountId = a.id;
+              if (draft.type === 'transfer' && draft.toAccountId === a.id) {
+                const other = DB.state.accounts.find((x) => x.id !== a.id);
+                draft.toAccountId = other ? other.id : null;
+                drawToAccts();
+              }
+              drawAccts();
+            }
           }, [el('span', { text: acctIcon(a.type) }), el('span', { text: a.name })]));
         });
       };
       drawAccts();
+
+      // Destination account (transfers only)
+      const toChips = el('div', { class: 'chips scroll' });
+      const drawToAccts = () => {
+        toChips.innerHTML = '';
+        DB.state.accounts.filter((a) => a.id !== draft.accountId).forEach((a) => {
+          toChips.append(el('button', {
+            class: 'chip' + (draft.toAccountId === a.id ? ' active' : ''),
+            onclick: () => { draft.toAccountId = a.id; drawToAccts(); }
+          }, [el('span', { text: acctIcon(a.type) }), el('span', { text: a.name })]));
+        });
+      };
 
       // Category chips
       const catChips = el('div', { class: 'chips scroll' });
@@ -1976,10 +2054,18 @@
           const val = CSV.parseAmount(amount.value);
           if (val == null || val <= 0) return toast('Enter an amount');
           if (!draft.accountId) return toast('Pick an account');
-          if (!draft.categoryId) return toast('Pick a category');
           if (!draft.date) return toast('Pick a date');
+          if (draft.type === 'transfer') {
+            if (!draft.toAccountId) return toast('Pick the destination account');
+            if (draft.toAccountId === draft.accountId) return toast('Pick two different accounts');
+            draft.categoryId = null;      // transfers are not spending
+            delete draft.needsReview;
+          } else {
+            if (!draft.categoryId) return toast('Pick a category');
+            delete draft.toAccountId;
+            delete draft.needsReview;     // manually edited = reviewed
+          }
           draft.amount = Math.round(val * 100) / 100;
-          delete draft.needsReview;   // manually edited = reviewed
           await DB.put('transactions', draft);
           await bumpChanges(1);
           api.close();
@@ -1988,14 +2074,58 @@
         }
       });
 
+      const acctLabel = el('label', { text: 'Account' });
+      const catField = el('div', { class: 'field' },
+        [el('label', { text: 'Category' }), catChips]);
+      const noteField = el('div', { class: 'field' },
+        [el('label', { text: 'Note' }), note, suggest]);
+      const toField = el('div', { class: 'field', style: 'display:none' },
+        [el('label', { text: 'To account' }), toChips]);
+
+      // One-tap repeat: your most frequent recent charges, added instantly (undoable)
+      if (!existing) {
+        const freq = frequentTransactions(5);
+        if (freq.length) {
+          const chips = el('div', { class: 'chips scroll' });
+          freq.forEach(({ tx, count }) => {
+            const c = DB.category(tx.categoryId);
+            chips.append(el('button', { class: 'chip repeat-chip', onclick: async () => {
+              const copy = {
+                id: null, type: 'expense', amount: tx.amount, date: U.todayISO(),
+                categoryId: tx.categoryId, accountId: tx.accountId, note: tx.note
+              };
+              await DB.put('transactions', copy);
+              await bumpChanges(1);
+              api.close();
+              toastUndo('Added ' + fmtEUR(copy.amount), async () => {
+                await DB.del('transactions', copy.id);
+                await bumpChanges(1);
+                render();
+              });
+              render();
+            } }, [
+              el('span', { text: c ? c.icon : '•' }),
+              el('span', { text: (tx.note || '').slice(0, 14) }),
+              el('span', { class: 'repeat-amt', text: fmtEUR(tx.amount) }),
+              el('span', { class: 'repeat-count', text: '×' + count })
+            ]));
+          });
+          body.append(el('div', { class: 'field' }, [
+            el('label', { text: 'Repeat a frequent one' }), chips
+          ]));
+        }
+      }
+
       body.append(
         seg, amountWrap,
         el('div', { class: 'field' }, [el('label', { text: 'Date' }), date]),
-        el('div', { class: 'field' }, [el('label', { text: 'Account' }), acctChips]),
-        el('div', { class: 'field' }, [el('label', { text: 'Category' }), catChips]),
-        el('div', { class: 'field' }, [el('label', { text: 'Note' }), note, suggest]),
+        el('div', { class: 'field' }, [acctLabel, acctChips]),
+        toField,
+        catField,
+        noteField,
         save
       );
+      syncSeg();   // apply per-type field visibility now that fields exist
 
       if (existing) {
         body.append(
@@ -2003,10 +2133,16 @@
           el('button', {
             class: 'btn block danger', text: 'Delete transaction',
             onclick: async () => {
-              if (!(await confirmSheet('Delete this transaction?', 'Delete', true))) return;
+              const snapshot = { ...existing };
               await DB.del('transactions', existing.id);
               await bumpChanges(1);
-              api.close(); toast('Deleted'); render();
+              api.close();
+              toastUndo('Deleted', async () => {
+                await DB.put('transactions', snapshot);
+                await bumpChanges(1);
+                render();
+              });
+              render();
             }
           })
         );
@@ -2763,6 +2899,7 @@
     const adoptable = new Map();
     DB.state.transactions.forEach((t) => {
       if (t.externalId) { byExternal.set(t.externalId, t); return; }
+      if (t.type === 'transfer') return;      // never adopt a transfer as a bank row
       const signed = t.type === 'income' ? t.amount : -t.amount;
       const k = t.date + '|' + signed.toFixed(2);
       if (!adoptable.has(k)) adoptable.set(k, []);

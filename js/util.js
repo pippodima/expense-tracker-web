@@ -111,6 +111,22 @@ const U = (() => {
     toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
   }
 
+  /** Toast with an action button (used for Undo instead of confirm dialogs). */
+  function toastAction(msg, actionLabel, onAction, ms) {
+    const old = $('#toast-action');
+    if (old) old.remove();
+    const btn = el('button', { class: 'ta-btn', text: actionLabel });
+    const t = el('div', { id: 'toast-action', class: 'toast toast-action' }, [
+      el('span', { text: msg }), btn
+    ]);
+    document.body.appendChild(t);
+    requestAnimationFrame(() => t.classList.add('show'));
+    const dismiss = () => { t.classList.remove('show'); setTimeout(() => t.remove(), 250); };
+    const timer = setTimeout(dismiss, ms || 6000);
+    btn.addEventListener('click', () => { clearTimeout(timer); dismiss(); onAction(); });
+    return dismiss;
+  }
+
   /** Trigger a client-side file download (iOS Safari opens the share sheet). */
   function download(filename, text, mime) {
     const blob = new Blob([text], { type: mime || 'application/octet-stream' });
@@ -124,6 +140,6 @@ const U = (() => {
   return {
     uid, fmtEUR, fmtEURShort, fmtNum, todayISO, fmtDate, monthLabel, monthRange,
     PALETTE, PALETTE_ORDER, colorOf, tintOf, isDark,
-    $, $$, el, esc, toast, download
+    $, $$, el, esc, toast, toastAction, download
   };
 })();

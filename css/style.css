@@ -433,6 +433,7 @@ h2 { font-size: 1.05rem; }
 .tx-sub { font-size: 0.75rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tx-amt { font-weight: 700; font-size: 0.95rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tx-amt.pos { color: var(--good); }
+.tx-amt.neutral { color: var(--muted); }
 
 /* Swipe-to-reveal actions on transaction rows */
 .swipe-wrap {
@@ -1058,3 +1059,22 @@ hr.sep { border: none; border-top: 1px solid var(--hairline); margin: 12px 0; }
   white-space: nowrap;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* Repeat chips in the add sheet */
+.repeat-chip { gap: 5px; }
+.repeat-chip .repeat-amt { font-weight: 700; font-variant-numeric: tabular-nums; }
+.repeat-chip .repeat-count { font-size: 0.7rem; color: var(--muted); }
+
+/* Toast with an Undo action */
+.toast-action {
+  display: flex; align-items: center; gap: 14px;
+  padding-right: 8px;
+}
+.toast-action .ta-btn {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  font-weight: 700; font-size: 0.85rem;
+  padding: 6px 12px; border-radius: 14px;
+  pointer-events: auto;
+}
+#toast-action { pointer-events: none; }
