@@ -202,6 +202,52 @@
     return out;
   }
 
+  /* ---- Per-category budgets: { categoryId: monthlyAmount } ---- */
+  const catBudgets = () => DB.state.meta.categoryBudgets || {};
+
+  /** Spend vs limit for one category in the given month range. */
+  function catBudgetStatus(catId, range) {
+    const limit = catBudgets()[catId];
+    if (!limit) return null;
+    const r = range || periodRange();
+    const spent = DB.state.transactions
+      .filter((t) => t.type === 'expense' && t.categoryId === catId && inRange(t, r))
+      .reduce((s, t) => s + t.amount, 0);
+    return { limit, spent, remaining: limit - spent,
+      pct: limit > 0 ? Math.min(100, (spent / limit) * 100) : 0, over: spent > limit };
+  }
+
+  function openCategoryBudgetsSheet() {
+    openSheet('Category limits', (body, api) => {
+      body.append(el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:14px', text:
+        'Optional monthly limit per category, on top of the overall budget. Leave a field ' +
+        'empty for no limit.' }));
+      const inputs = DB.state.categories.map((c) => {
+        const cur = catBudgets()[c.id];
+        const input = el('input', { type: 'text', inputmode: 'decimal', placeholder: '—',
+          value: cur ? String(cur).replace('.', ',') : '' });
+        body.append(el('div', { class: 'catlimit-row' }, [
+          el('span', { class: 'cat-cell-icon', text: c.icon,
+            style: 'background:' + U.tintOf(c.color) }),
+          el('span', { class: 'catlimit-name', text: c.name }),
+          el('span', { class: 'catlimit-input' }, [input, el('span', { class: 'muted', text: '€' })])
+        ]));
+        return { c, input };
+      });
+      body.append(el('div', { class: 'spacer' }), el('button', {
+        class: 'btn block primary', text: 'Save limits', onclick: async () => {
+          const next = {};
+          for (const { c, input } of inputs) {
+            const v = CSV.parseAmount(input.value);
+            if (v != null && v > 0) next[c.id] = Math.round(v * 100) / 100;
+          }
+          await DB.setMeta('categoryBudgets', next);
+          api.close(); toast('Category limits saved'); render();
+        }
+      }));
+    }, { tall: true });
+  }
+
   function meter(value, max) {
     const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
     const over = value > max && max > 0;
@@ -349,7 +395,12 @@
 
     root.append(el('div', { class: 'view-title' }, [
       el('h1', { text: 'Home' }),
-      el('div', { class: 'muted', text: fmtEUR(DB.totalBalance()) + ' total' })
+      el('div', { class: 'title-right' }, [
+        el('span', { class: 'muted', text: fmtEUR(DB.totalBalance()) + ' total' }),
+        el('button', { class: 'icon-btn', 'aria-label': 'Search', onclick: openGlobalSearch,
+          html: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/>' +
+            '<path d="M16 16l4.5 4.5"/></svg>' })
+      ])
     ]));
 
     // Passive backup nudge — shows whenever there's something unsaved.
@@ -458,6 +509,102 @@
     root.append(catCard);
   }
 
+  /* ---- Global search: everything, from anywhere ---- */
+  function openGlobalSearch() {
+    openSheet('Search', (body) => {
+      const input = el('input', { class: 'searchbox', type: 'search', autocomplete: 'off',
+        placeholder: 'Note, place, category, account or amount…' });
+      const results = el('div');
+      body.append(input, results);
+
+      const draw = () => {
+        const q = input.value.trim().toLowerCase();
+        results.innerHTML = '';
+        if (q.length < 2) {
+          results.append(el('div', { class: 'empty', muted: '', html:
+            '<span class="big">⌕</span>Type at least two characters' }));
+          return;
+        }
+        // An amount query like "2,80" or "45" matches the value too
+        const qNum = CSV.parseAmount(q);
+        const matches = DB.state.transactions.filter((t) => {
+          const cat = DB.category(t.categoryId);
+          const acct = DB.account(t.accountId);
+          const hay = ((t.note || '') + ' ' + (cat ? cat.name : '') + ' ' +
+            (acct ? acct.name : '') + ' ' + merchantKey(t.note)).toLowerCase();
+          if (hay.includes(q)) return true;
+          return qNum != null && Math.abs(t.amount - Math.abs(qNum)) < 0.005;
+        }).sort((a, b) => b.date.localeCompare(a.date));
+
+        // Matching categories and places jump straight to their own views
+        const cats = DB.state.categories.filter((c) => c.name.toLowerCase().includes(q));
+        const places = groupByMerchant(matches.filter((t) => t.type === 'expense'))
+          .filter((g) => g.label.toLowerCase().includes(q) || g.key.toLowerCase().includes(q))
+          .slice(0, 3);
+
+        if (!matches.length && !cats.length) {
+          results.append(el('div', { class: 'empty', html:
+            '<span class="big">⌕</span>Nothing found for “' + esc(q) + '”' }));
+          return;
+        }
+
+        if (cats.length) {
+          results.append(el('div', { class: 'sub-title', text: 'Categories' }));
+          cats.forEach((c) => results.append(el('button', { class: 'pick-row',
+            onclick: () => openCategoryDetail(c) }, [
+            el('span', { class: 'cat-cell-icon', text: c.icon,
+              style: 'background:' + U.tintOf(c.color) }),
+            el('span', { class: 's-main', text: c.name }),
+            el('span', { class: 's-chev', text: '›' })
+          ])));
+        }
+        if (places.length) {
+          results.append(el('div', { class: 'sub-title', style: 'margin-top:12px', text: 'Places' }));
+          places.forEach((g) => results.append(el('button', { class: 'pick-row',
+            onclick: () => openMerchantDetail(g, { label: 'Matches' }) }, [
+            el('span', { class: 's-main' }, [
+              el('div', { text: g.label }),
+              el('div', { class: 's-sub', text: g.count + '× · ' + fmtEUR(g.total) })
+            ]),
+            el('span', { class: 's-chev', text: '›' })
+          ])));
+        }
+
+        results.append(el('div', { class: 'sub-title', style: 'margin-top:12px',
+          text: matches.length + ' transaction' + (matches.length === 1 ? '' : 's') }));
+        const total = matches.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+        if (total > 0) {
+          results.append(el('p', { class: 'muted', style: 'margin-bottom:8px',
+            text: fmtEUR(total) + ' spent in total' }));
+        }
+        matches.slice(0, 60).forEach((t) => {
+          const c = DB.category(t.categoryId);
+          results.append(el('button', { class: 'cat-tx', onclick: () => openTxSheet(t) }, [
+            el('div', { class: 'cat-tx-main' }, [
+              el('div', { class: 'cat-tx-note', text: t.note || 'Transaction' }),
+              el('div', { class: 'cat-tx-sub', text: U.fmtDate(t.date) +
+                (c ? ' · ' + c.name : '') })
+            ]),
+            el('div', { class: 'cat-tx-amt' + (t.type === 'income' ? ' pos' : ''),
+              text: (t.type === 'income' ? '+ ' : t.type === 'transfer' ? '⇄ ' : '− ') +
+                fmtEUR(t.amount) })
+          ]));
+        });
+        if (matches.length > 60) {
+          results.append(el('p', { class: 'muted', style: 'padding:10px 0',
+            text: 'and ' + (matches.length - 60) + ' more…' }));
+        }
+      };
+
+      let deb;
+      input.addEventListener('input', () => {
+        clearTimeout(deb); deb = setTimeout(draw, 130);
+      });
+      draw();
+      setTimeout(() => input.focus(), 320);
+    }, { tall: true });
+  }
+
   const uncategorizedCat = () =>
     DB.state.categories.find((c) => c.name.toLowerCase() === 'uncategorized') || null;
 
@@ -539,6 +686,22 @@
           label + ' · ' + all.length + ' transaction' + (all.length === 1 ? '' : 's') +
           (pct ? ' · ' + pct + '% of spending' : '') })
       ]));
+
+      // Per-category limit, if one is set for this category
+      const cb = catId ? catBudgetStatus(catId, r) : null;
+      if (cb) {
+        body.append(el('div', { class: 'catbudget' }, [
+          el('div', { class: 'budget-line' }, [
+            el('span', { text: 'Monthly limit' }),
+            el('span', { class: cb.over ? 'neg' : 'pos',
+              text: fmtEUR(cb.spent) + ' / ' + fmtEUR(cb.limit) })
+          ]),
+          meter(cb.spent, cb.limit),
+          el('div', { class: 'muted', style: 'margin-top:6px', text: cb.over
+            ? fmtEUR(-cb.remaining) + ' over the limit'
+            : fmtEUR(cb.remaining) + ' left this month' })
+        ]));
+      }
 
       if (all.length > 1 && biggest) {
         body.append(el('div', { class: 'cat-detail-stats' }, [
@@ -2304,7 +2467,11 @@
                 : 'as a single cap for the whole month.')
             : 'Set a monthly spending limit, optionally spread across each day and rebalanced automatically.' }),
           el('button', { class: 'btn block primary', text: bud ? 'Edit budget' : 'Set a budget',
-            onclick: openBudgetSheet })
+            onclick: openBudgetSheet }),
+          el('div', { class: 'spacer' }),
+          el('button', { class: 'btn block', text: 'Category limits' +
+            (Object.keys(catBudgets()).length ? ' (' + Object.keys(catBudgets()).length + ')' : ''),
+            onclick: openCategoryBudgetsSheet })
         );
       }));
 

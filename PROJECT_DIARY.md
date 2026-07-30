@@ -546,3 +546,28 @@ Shipped:
   `sync/paste_to_sync.py` and the file import (renamed "Import statement file"), since that is
   the workflow actually in use — it never touched the API.
 - Encrypted backups stay (they work offline everywhere).
+
+### Chapter 22 — Transfers, minimalism pass, undo, repeat, category limits, search (2026-07-30)
+Goal: a batch chosen from a design critique — fix the transfer correctness gap, strip the UI
+back, remove daily friction, and add per-category budgets + global search.
+Shipped (three commits):
+1. **Account transfers** (correctness, not a nicety): moving money between accounts previously
+   had to be logged as an expense *and* an income, inflating both totals and distorting Net.
+   New `transfer` type with `accountId` → `toAccountId`: `accountBalance()` debits one and
+   credits the other, and transfers are excluded from income/expense/net, category views,
+   budgets, all stats, subscriptions, trips, day totals and bank-sync adoption. Shown with ⇄
+   and "From → To". Verified 7/7 balance/aggregation cases.
+   **Undo replaces confirm dialogs** for deletes (`U.toastAction`), and the add sheet offers
+   **one-tap repeat chips** of your most frequent recent charges (undoable).
+2. **Minimalism pass.** Stats' two stacked segmented controls became one row — `‹ period pill ›`
+   opening a range picker (4 permanent buttons removed). Home leads with **one hero number**
+   (today's allowance when a daily budget exists, else month net) with income/expense as a
+   quiet line; the 3 stat tiles are gone and the budget card no longer repeats today's figure.
+   Stats' donut + category list merged into a single card — the separate legend and duplicate
+   "All categories" card said the same thing twice. Tab bar and FAB now use **monochrome inline
+   SVG** line icons instead of emoji, and 17 button labels were tightened.
+3. **Per-category budgets** (`meta.categoryBudgets`): optional monthly limit per category, set
+   in Settings → Budget → Category limits, with spend/limit meter in the category detail sheet.
+   **Global search** from the Home header: one field across notes, places (merchant-normalized,
+   so "unicoop" finds all branches), category and account names, *and* amounts ("2,80"), with
+   category and place shortcuts. Verified against the real data.
