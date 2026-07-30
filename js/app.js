@@ -24,6 +24,49 @@
   /** Destructive actions are immediate + undoable instead of confirm-gated. */
   const toastUndo = (msg, undo) => U.toastAction(msg, 'Undo', undo);
 
+  /* ======================= Private mode =======================
+     Threat model: someone glancing at your screen. What actually exposes you is
+     *wealth* — account balances, the combined total, income and net — not what
+     you may spend today. So "Balances" masks those; "All amounts" additionally
+     masks every individual figure. Masked values un-blur on tap for a few
+     seconds, and can re-hide automatically whenever the app is backgrounded. */
+
+  const privacyCfg = () =>
+    Object.assign({ on: false, level: 'balances', auto: false }, DB.state.meta.privacy || {});
+
+  function applyPrivacy() {
+    const p = privacyCfg();
+    document.body.classList.toggle('privacy', !!p.on);
+    document.body.classList.toggle('privacy-all', !!p.on && p.level === 'all');
+  }
+
+  async function setPrivacy(patch) {
+    await DB.setMeta('privacy', Object.assign({}, privacyCfg(), patch));
+    applyPrivacy();
+  }
+
+  async function togglePrivacy() {
+    const p = privacyCfg();
+    await setPrivacy({ on: !p.on });
+    toast(privacyCfg().on ? 'Amounts hidden' : 'Amounts visible');
+    render();
+  }
+
+  /** Tap a masked figure to peek at it briefly. */
+  function initPrivacyPeek() {
+    document.addEventListener('click', (e) => {
+      if (!document.body.classList.contains('privacy')) return;
+      // Only figures that aren't inside a button — otherwise the tap would also
+      // trigger that row's action.
+      const hit = e.target.closest('.hero-value.sens, .hero-sub, .total-chip, ' +
+        '.t-value, .cmp-delta, .cmp-vals, .cmp-diff, .cat-detail-total');
+      if (!hit || hit.closest('button')) return;
+      hit.classList.add('peek');
+      clearTimeout(hit._peek);
+      hit._peek = setTimeout(() => hit.classList.remove('peek'), 4000);
+    });
+  }
+
   const ACCOUNT_TYPES = [
     ['checking', 'Checking', '🏦'],
     ['savings', 'Savings', '🐖'],
@@ -396,10 +439,19 @@
     root.append(el('div', { class: 'view-title' }, [
       el('h1', { text: 'Home' }),
       el('div', { class: 'title-right' }, [
-        el('span', { class: 'muted', text: fmtEUR(DB.totalBalance()) + ' total' }),
+        el('span', { class: 'muted total-chip', text: fmtEUR(DB.totalBalance()) + ' total' }),
         el('button', { class: 'icon-btn', 'aria-label': 'Search', onclick: openGlobalSearch,
           html: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/>' +
-            '<path d="M16 16l4.5 4.5"/></svg>' })
+            '<path d="M16 16l4.5 4.5"/></svg>' }),
+        el('button', { class: 'icon-btn', 'aria-label': 'Hide amounts', onclick: togglePrivacy,
+          html: privacyCfg().on
+            // eye with a slash = currently hidden
+            ? '<svg viewBox="0 0 24 24"><path d="M3 3l18 18"/>' +
+              '<path d="M10.6 5.2A9 9 0 0 1 12 5c5 0 9 5 9 7a11 11 0 0 1-2.3 3.2"/>' +
+              '<path d="M6.5 7.3C4.3 8.8 3 11.2 3 12c0 2 4 7 9 7a8.7 8.7 0 0 0 3.6-.8"/>' +
+              '<path d="M9.9 10a3 3 0 0 0 4.2 4.2"/></svg>'
+            : '<svg viewBox="0 0 24 24"><path d="M3 12s3.5-7 9-7 9 7 9 7-3.5 7-9 7-9-7-9-7Z"/>' +
+              '<circle cx="12" cy="12" r="2.8"/></svg>' })
       ])
     ]));
 
@@ -456,8 +508,10 @@
     root.append(el('div', { class: 'hero' }, [
       el('div', { class: 'hero-label', text: heroDaily
         ? (heroVal >= 0 ? 'Left to spend today' : 'Over budget today') : 'Net this month' }),
-      el('div', { class: 'hero-value ' + (heroVal > 0 ? 'pos' : heroVal < 0 ? 'neg' : ''),
-        text: fmtEUR(heroVal) }),
+      // Today's allowance isn't wealth-revealing, so it stays visible in private
+      // mode; the month's net does not.
+      el('div', { class: 'hero-value ' + (heroDaily ? '' : 'sens ') +
+        (heroVal > 0 ? 'pos' : heroVal < 0 ? 'neg' : ''), text: fmtEUR(heroVal) }),
       el('div', { class: 'hero-sub muted' }, [
         el('span', { text: '↑ ' + fmtEUR(income) }),
         el('span', { text: '↓ ' + fmtEUR(expense) }),
@@ -2682,6 +2736,61 @@
         reminderSettingsBody(b);
       }));
 
+    /* ---------- Private mode ---------- */
+    const pv = privacyCfg();
+    root.append(settingsSection('privacy', '👁', 'Private mode',
+      pv.on ? (pv.level === 'all' ? 'All amounts hidden' : 'Balances hidden') : 'Off', (b) => {
+        b.append(el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:12px', text:
+          'Blurs the figures that reveal how much money you have, so a glance over your ' +
+          'shoulder shows nothing. Tap any blurred number to peek at it for a few seconds.' }));
+
+        const onToggle = el('input', { type: 'checkbox' });
+        onToggle.checked = pv.on;
+        onToggle.addEventListener('change', async () => {
+          await setPrivacy({ on: onToggle.checked });
+          ui.settings.open.privacy = true; render();
+        });
+        b.append(el('label', { class: 'switch-row' }, [
+          el('div', { class: 's-main' }, [
+            el('div', { text: 'Hide amounts' }),
+            el('div', { class: 's-sub', text: 'Also toggleable from the eye button on Home.' })
+          ]),
+          onToggle
+        ]));
+
+        const lvl = el('select', {}, [
+          el('option', { value: 'balances', text: 'Balances, income and net' }),
+          el('option', { value: 'all', text: 'Every amount, including transactions' })
+        ]);
+        lvl.value = pv.level;
+        lvl.addEventListener('change', async () => {
+          await setPrivacy({ level: lvl.value });
+          ui.settings.open.privacy = true; render();
+        });
+
+        const autoToggle = el('input', { type: 'checkbox' });
+        autoToggle.checked = pv.auto;
+        autoToggle.addEventListener('change', async () => {
+          await setPrivacy({ auto: autoToggle.checked });
+          ui.settings.open.privacy = true; render();
+        });
+
+        b.append(
+          el('hr', { class: 'sep' }),
+          el('div', { class: 'field' }, [el('label', { text: 'What to hide' }), lvl]),
+          el('label', { class: 'switch-row' }, [
+            el('div', { class: 's-main' }, [
+              el('div', { text: 'Re-hide when I close the app' }),
+              el('div', { class: 's-sub', text: 'Turns hiding back on every time you leave.' })
+            ]),
+            autoToggle
+          ]),
+          el('p', { class: 'muted', style: 'line-height:1.5;margin-top:10px', text:
+            'Your daily allowance stays visible either way — it says nothing about your ' +
+            'balance. This hides figures on screen; it is not encryption.' })
+        );
+      }));
+
     /* ---------- Quick-add ---------- */
     const stepList = (items) =>
       el('ol', { class: 'howto-steps' }, items.map((t) => el('li', { html: t })));
@@ -4138,8 +4247,14 @@
     // Autosave: snapshot after changes and whenever the app is backgrounded/closed.
     await restoreFileHandle();
     DB.onWrite = scheduleAutosave;
+    applyPrivacy();
+    initPrivacyPeek();
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') runAutosave('hidden');
+      if (document.visibilityState === 'hidden') {
+        runAutosave('hidden');
+        // Re-hide amounts when the app goes to the background, if asked to
+        if (privacyCfg().auto && !privacyCfg().on) setPrivacy({ on: true }).then(render);
+      }
     });
     window.addEventListener('pagehide', () => { runAutosave('close'); });
     $$('.tabbar [data-tab]').forEach((b) =>

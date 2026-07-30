@@ -1156,3 +1156,36 @@ hr.sep { border: none; border-top: 1px solid var(--hairline); margin: 12px 0; }
   font-variant-numeric: tabular-nums;
   -webkit-appearance: none; appearance: none;
 }
+
+/* ============ Private mode ============
+   Level 1 ("balances") masks what reveals wealth: the combined total, account
+   balances, month net/income/expense figures and period deltas. The daily
+   allowance is deliberately NOT masked — it exposes nothing about your balance.
+   Level 2 ("all") additionally masks every individual amount. */
+.privacy .total-chip,
+.privacy .a-bal,
+.privacy .hero-value.sens,
+.privacy .hero-sub,
+.privacy .t-value,
+.privacy .cmp-delta,
+.privacy .cmp-vals,
+.privacy .cmp-diff,
+.privacy .budget-line span:last-child,
+.privacy-all .tx-amt,
+.privacy-all .cat-tx-amt,
+.privacy-all .catbar-val,
+.privacy-all .cat-detail-total,
+.privacy-all .place-total,
+.privacy-all .sub-amt,
+.privacy-all .trip-amt,
+.privacy-all .cal-amt,
+.privacy-all .tx-day span:last-child,
+.privacy-all .l-val {
+  filter: blur(7px);
+  transition: filter 0.18s ease;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* Tap to peek */
+.privacy .peek, .privacy-all .peek { filter: none; }

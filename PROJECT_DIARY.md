@@ -571,3 +571,23 @@ Shipped (three commits):
    **Global search** from the Home header: one field across notes, places (merchant-normalized,
    so "unicoop" finds all branches), category and account names, *and* amounts ("2,80"), with
    category and place shortcuts. Verified against the real data.
+
+### Chapter 23 — Private mode (2026-07-30)
+Goal: hide the figures that expose you to someone glancing at the screen — explicitly *not*
+the daily allowance, which reveals nothing about your balance.
+What counts as sensitive (the design decision): **wealth**, not activity. Level 1 "Balances"
+masks the combined total, per-account balances, the month's net/income/expense line, stats
+tiles and period-comparison deltas. Level 2 "All amounts" additionally masks every individual
+figure (transactions, category totals, places, trips, calendar day amounts). The
+"left to spend today" figure is never masked at either level.
+Shipped:
+- `meta.privacy = { on, level, auto }`; masking is done purely with CSS on existing class
+  names (`body.privacy` / `body.privacy-all` + a `sens` class on the hero only when it shows
+  Net), so no render call sites had to change.
+- Eye toggle in the Home header, plus a **Private mode** section in Settings (on/off, level,
+  and "re-hide when I close the app" which flips it back on at `visibilitychange`).
+- **Tap to peek**: tapping a blurred summary figure reveals it for 4 s; figures inside buttons
+  are excluded so the tap can't also trigger that row's action.
+- Stated in-UI: this hides numbers on screen, it is not encryption.
+Also documented: **Trips** are a *report*, not a filter — trip spending still counts toward
+monthly totals. An "exclude trips from monthly stats" option remains open.
