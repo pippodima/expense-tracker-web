@@ -162,6 +162,53 @@ const Detect = (() => {
     };
   }
 
+  /* ---- Direction column: unsigned amount + a separate expense/income marker ----
+     Common shapes: Uscita/Entrata · Debit/Credit · D/C · OUT/IN · -/+ ·
+     Withdrawal/Deposit · Addebito/Accredito. */
+
+  const EXPENSE_WORDS = ['expense', 'expenses', 'uscita', 'uscite', 'spesa', 'spese',
+    'debit', 'debito', 'addebito', 'dare', 'withdrawal', 'withdraw', 'out', 'paid out',
+    'payment', 'pagamento', 'egreso', 'gasto', 'ausgang', 'soll', 'd', '-'];
+  const INCOME_WORDS = ['income', 'incomes', 'entrata', 'entrate', 'credit', 'credito',
+    'accredito', 'avere', 'deposit', 'in', 'paid in', 'refund', 'rimborso', 'ingreso',
+    'eingang', 'haben', 'c', '+'];
+
+  /** 'expense' | 'income' | null for a single cell value. */
+  function classifyDirection(value) {
+    const v = norm(value);
+    if (!v) return null;
+    if (EXPENSE_WORDS.includes(v)) return 'expense';
+    if (INCOME_WORDS.includes(v)) return 'income';
+    // Fall back to a contained word (e.g. "card payment", "bank deposit")
+    if (EXPENSE_WORDS.some((w) => w.length > 2 && v.includes(w))) return 'expense';
+    if (INCOME_WORDS.some((w) => w.length > 2 && v.includes(w))) return 'income';
+    return null;
+  }
+
+  /**
+   * Find a column that says whether each row is money in or money out.
+   * Wants low cardinality and values that read as directions.
+   */
+  function detectDirectionColumn(columns, rows, skipIdx) {
+    const sample = rows.slice(0, 60);
+    let best = null, bestScore = 0;
+    columns.forEach((name, i) => {
+      if (skipIdx && skipIdx.has(i)) return;
+      const key = Array.isArray(sample[0]) ? i : name;
+      const values = sample.map((r) => r[key]).filter((v) => String(v == null ? '' : v).trim());
+      if (!values.length) return;
+      const uniq = new Set(values.map((v) => norm(v)));
+      if (uniq.size < 1 || uniq.size > 6) return;          // must be a small label set
+      const known = values.filter((v) => classifyDirection(v)).length / values.length;
+      if (known < 0.8) return;
+      // Both directions present is the strongest signal
+      const kinds = new Set(values.map((v) => classifyDirection(v)).filter(Boolean));
+      const score = known + (kinds.size > 1 ? 0.6 : 0) + headerScore(name, 'type') * 0.8;
+      if (score > bestScore) { bestScore = score; best = { i, name, key, values: [...uniq] }; }
+    });
+    return bestScore > 0.9 ? best : null;
+  }
+
   /**
    * Decide the date convention for a column of values.
    * Returns 'iso' | 'dmy' | 'mdy' | 'text', plus `ambiguous` when both D/M and
@@ -325,6 +372,7 @@ const Detect = (() => {
 
   return {
     detectColumns, detectDateFormat, parseDateSmart, detectAmountFormat, parseAmountSmart,
-    findHeaderRow, findRecordArray, looksDate, looksAmount, headerScore, norm
+    findHeaderRow, findRecordArray, detectDirectionColumn, classifyDirection,
+    looksDate, looksAmount, headerScore, norm
   };
 })();

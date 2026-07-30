@@ -618,3 +618,19 @@ Shipped:
   A bug found by those tests: single-decimal values like `-21.7` were read as EU thousands
   (→ -217); the decimal heuristic now treats "exactly three digits after the separator" as
   grouping and anything else as a decimal point.
+
+### Chapter 25 — Import: unsigned amount + direction column (2026-07-30)
+The user asked what happens when a file has a positive-only amount column plus a separate
+expense/income column. Answer at the time: **it broke** — direction came only from the sign,
+so every row would have imported as income.
+Shipped a third import mode, "Amount + type":
+- `Detect.detectDirectionColumn()` finds a low-cardinality column (≤6 labels) whose values
+  read as directions in ≥80% of rows, scoring higher when both directions appear; it will not
+  fire on a Category column.
+- `Detect.classifyDirection()` understands Uscita/Entrata, Expense/Income, Debit/Credit,
+  Addebito/Accredito, Withdrawal/Deposit, D/C, +/− and Spanish/German equivalents.
+- The confirmation step lists **each distinct label with an Expense/Income toggle**, so any
+  wording (even untranslated or bank-specific) can be mapped by hand; the mapping is saved
+  with the bank preset for next time.
+- Verified 3/3 end-to-end (Italian Uscita/Entrata, English Expense/Income, D/C letters) plus
+  13 classification cases and a no-false-positive check against a Category column.

@@ -1194,3 +1194,15 @@ hr.sep { border: none; border-top: 1px solid var(--hairline); margin: 12px 0; }
 .trip-right { text-align: right; flex: 0 0 auto; }
 .trip-bud { font-size: 0.72rem; font-variant-numeric: tabular-nums; }
 .trip-bud.neg { color: var(--bad); }
+
+/* Import: mapping each direction label to expense/income */
+.typemap-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 0;
+}
+.typemap-label {
+  flex: 1; min-width: 0; font-size: 0.85rem; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.typemap-row .seg { flex: 0 0 auto; width: 168px; }
+.typemap-row .seg button { min-height: 34px; font-size: 0.78rem; }

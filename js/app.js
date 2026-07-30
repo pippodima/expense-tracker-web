@@ -4216,6 +4216,17 @@
       st.debitCol = guess.debit.i;
       st.creditCol = guess.credit.i;
     }
+    // Unsigned amount + a separate Uscita/Entrata (or Debit/Credit) column?
+    if (!guess.pair) {
+      const skip = new Set([st.dateCol, st.amountCol, st.descCol]);
+      const dir = Detect.detectDirectionColumn(rows[0], dataRows, skip);
+      if (dir) {
+        st.mode = 'typed';
+        st.typeCol = dir.i;
+        st.typeMap = {};
+        dir.values.forEach((v) => { st.typeMap[v] = Detect.classifyDirection(v) || 'expense'; });
+      }
+    }
     // Date convention (DD/MM vs MM/DD vs ISO) and decimal convention
     const dateVals = dataRows.map((r) => r[st.dateCol]);
     st.dateFmt = Detect.detectDateFormat(dateVals);
@@ -4255,6 +4266,8 @@
             };
             st.hasHeader = m.hasHeader !== false;
             st.mode = m.mode || 'single';
+            if (m.typeCol != null) st.typeCol = m.typeCol;
+            if (m.typeMap) st.typeMap = Object.assign({}, m.typeMap);
             st.invert = !!m.invert;
             st.dateCol = byName(m.dateName, m.dateCol);
             st.descCol = byName(m.descName, m.descCol);
@@ -4275,12 +4288,23 @@
         dateSel.addEventListener('change', () => { st.dateCol = +dateSel.value; });
         descSel.addEventListener('change', () => { st.descCol = +descSel.value; });
 
-        const modeSeg = el('div', { class: 'seg' });
-        const bSingle = el('button', { text: 'One amount column', class: st.mode === 'single' ? 'active' : '' });
+        const modeSeg = el('div', { class: 'seg seg-4' });
+        const bSingle = el('button', { text: 'Signed amount', class: st.mode === 'single' ? 'active' : '' });
         const bDouble = el('button', { text: 'Debit + credit', class: st.mode === 'double' ? 'active' : '' });
+        const bTyped = el('button', { text: 'Amount + type', class: st.mode === 'typed' ? 'active' : '' });
         bSingle.addEventListener('click', () => { st.mode = 'single'; draw(); });
         bDouble.addEventListener('click', () => { st.mode = 'double'; draw(); });
-        modeSeg.append(bSingle, bDouble);
+        bTyped.addEventListener('click', () => {
+          st.mode = 'typed';
+          if (st.typeCol == null) {
+            const skip = new Set([st.dateCol, st.amountCol, st.descCol]);
+            const dir = Detect.detectDirectionColumn(rows[0], rows.slice(1), skip);
+            st.typeCol = dir ? dir.i : rows[0].findIndex((_, i) => !skip.has(i));
+          }
+          if (!st.typeMap) st.typeMap = {};
+          draw();
+        });
+        modeSeg.append(bSingle, bDouble, bTyped);
 
         const acctSel = el('select', {}, DB.state.accounts.map((a) =>
           el('option', { value: a.id, text: acctIcon(a.type) + ' ' + a.name })));
@@ -4299,6 +4323,45 @@
             el('label', { style: 'display:flex;gap:8px;align-items:center;font-size:0.85rem;margin-bottom:14px' },
               [inv, el('span', { text: 'Invert sign (positive numbers are expenses)' })])
           );
+        } else if (st.mode === 'typed') {
+          const amtSel = colOptions(st.amountCol);
+          amtSel.addEventListener('change', () => { st.amountCol = +amtSel.value; draw(); });
+          const typeSel = colOptions(st.typeCol);
+          typeSel.addEventListener('change', () => {
+            st.typeCol = +typeSel.value; st.typeMap = {}; draw();
+          });
+          amountFields.append(
+            el('div', { class: 'field' }, [
+              el('label', { text: 'Amount column (always positive)' }), amtSel]),
+            el('div', { class: 'field' }, [
+              el('label', { text: 'Expense / income column' }), typeSel])
+          );
+          // Map each distinct label to a direction — works for any wording
+          const labels = [...new Set(rows.slice(1)
+            .map((r) => Detect.norm(r[st.typeCol]))
+            .filter((v) => v))].slice(0, 8);
+          if (!st.typeMap) st.typeMap = {};
+          labels.forEach((v) => {
+            if (!st.typeMap[v]) st.typeMap[v] = Detect.classifyDirection(v) || 'expense';
+          });
+          const mapWrap = el('div', { class: 'field' }, [
+            el('label', { text: 'What each label means' })]);
+          labels.forEach((v) => {
+            const seg2 = el('div', { class: 'seg', style: 'flex:0 0 auto' });
+            const be = el('button', { text: 'Expense' });
+            const bi = el('button', { text: 'Income' });
+            const sync = () => {
+              be.className = st.typeMap[v] === 'expense' ? 'active exp' : '';
+              bi.className = st.typeMap[v] === 'income' ? 'active inc' : '';
+            };
+            be.addEventListener('click', () => { st.typeMap[v] = 'expense'; sync(); });
+            bi.addEventListener('click', () => { st.typeMap[v] = 'income'; sync(); });
+            sync(); seg2.append(be, bi);
+            mapWrap.append(el('div', { class: 'typemap-row' }, [
+              el('span', { class: 'typemap-label', text: v || '(empty)' }), seg2
+            ]));
+          });
+          amountFields.append(mapWrap);
         } else {
           const debSel = colOptions(st.debitCol);
           const creSel = colOptions(st.creditCol);
@@ -4346,7 +4409,9 @@
 
         const detectedNote = el('p', { class: 'muted', style: 'margin-bottom:10px', text:
           filename + ' · ' + (rows.length - 1) + ' rows · detected ' +
-          (st.mode === 'double' ? 'debit/credit columns' : 'a single amount column') +
+          (st.mode === 'double' ? 'debit/credit columns'
+            : st.mode === 'typed' ? 'an amount column plus an expense/income column'
+            : 'a single signed amount column') +
           (st.amtFmt ? ', ' + (st.amtFmt.format === 'eu' ? '1.234,56' : '1,234.56') + ' numbers' : '') });
 
         body.append(
@@ -4369,6 +4434,7 @@
                   id: null, name: presetName.value.trim(),
                   mapping: {
                     hasHeader: st.hasHeader, mode: st.mode, invert: st.invert,
+                    typeCol: st.typeCol, typeMap: st.typeMap,
                     dateCol: st.dateCol, descCol: st.descCol, amountCol: st.amountCol,
                     debitCol: st.debitCol, creditCol: st.creditCol,
                     dateName: st.hasHeader ? rows[0][st.dateCol] : null,
@@ -4404,7 +4470,14 @@
       let signed = null;
       const money = (v) => (st.amtFmt
         ? Detect.parseAmountSmart(v, st.amtFmt.format) : CSV.parseAmount(v));
-      if (st.mode === 'single') {
+      if (st.mode === 'typed') {
+        const val = money(r[st.amountCol]);
+        if (val != null) {
+          const dir = st.typeMap[Detect.norm(r[st.typeCol])] ||
+            Detect.classifyDirection(r[st.typeCol]) || 'expense';
+          signed = dir === 'income' ? Math.abs(val) : -Math.abs(val);
+        }
+      } else if (st.mode === 'single') {
         signed = money(r[st.amountCol]);
         if (signed != null && st.invert) signed = -signed;
       } else {
