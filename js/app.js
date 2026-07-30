@@ -209,7 +209,7 @@
       [el('div', { class: 'meter-fill', style: 'width:' + pct + '%' })]);
   }
 
-  function budgetCard(bs) {
+  function budgetCard(bs, heroShowsToday) {
     const card = el('div', { class: 'card budget-card' }, [
       el('div', { class: 'card-head' }, [
         el('h2', { text: 'Budget' }),
@@ -218,12 +218,20 @@
     ]);
 
     if (bs.mode === 'daily' && bs.isCurrent) {
-      const rem = bs.todayRemaining;
-      card.append(el('div', { class: 'budget-today' }, [
-        el('div', { class: 'bt-label', text: rem >= 0 ? 'Left to spend today' : 'Over budget today' }),
-        el('div', { class: 'bt-value ' + (rem >= 0 ? 'pos' : 'neg'), text: fmtEUR(rem) }),
-        el('div', { class: 'muted', text: 'of ' + fmtEUR(bs.todayBudget) + ' allowance today' })
-      ]));
+      // The hero already shows today's figure — don't repeat it here.
+      if (!heroShowsToday) {
+        const rem = bs.todayRemaining;
+        card.append(el('div', { class: 'budget-today' }, [
+          el('div', { class: 'bt-label', text: rem >= 0 ? 'Left to spend today' : 'Over budget today' }),
+          el('div', { class: 'bt-value ' + (rem >= 0 ? 'pos' : 'neg'), text: fmtEUR(rem) }),
+          el('div', { class: 'muted', text: 'of ' + fmtEUR(bs.todayBudget) + ' allowance today' })
+        ]));
+      } else {
+        card.append(el('div', { class: 'budget-line' }, [
+          el('span', { text: 'Today' }),
+          el('span', { text: fmtEUR(bs.spentToday) + ' / ' + fmtEUR(bs.todayBudget) })
+        ]));
+      }
       card.append(meter(bs.spentToday, Math.max(bs.todayBudget, bs.spentToday, 0.01)));
 
       if (bs.tomorrowBudget != null) {
@@ -353,7 +361,7 @@
                        : 'Last backup: ' + new Date(last).toLocaleDateString('it-IT') + '.')
         : 'Not backed up yet — save a copy so you can’t lose it.';
       root.append(el('div', { class: 'banner' }, [
-        el('span', { text: '💾', style: 'font-size:1.3rem' }),
+        el('span', { text: '💾', style: 'font-size:1.2rem' }),
         el('div', { class: 'b-main', html: '<strong>Back up your data</strong>' + esc(sub) }),
         el('button', { class: 'btn small primary', text: 'Export', onclick: exportJSON })
       ]));
@@ -388,28 +396,25 @@
     nav.append(prev, label, next);
     root.append(nav);
 
-    // Stat tiles: net is the headline
+    // One hero number: today's allowance when a daily budget exists (the actual
+    // daily decision), otherwise the month's net. Income/expenses sit quietly below.
     const net = income - expense;
-    const tiles = el('div', { class: 'tiles' });
-    tiles.append(
-      el('div', { class: 'tile wide' }, [
-        el('div', { class: 't-label', text: 'Net' }),
-        el('div', { class: 't-value ' + (net > 0 ? 'pos' : net < 0 ? 'neg' : ''), text: fmtEUR(net) })
-      ]),
-      el('div', { class: 'tile' }, [
-        el('div', { class: 't-label', text: 'Income' }),
-        el('div', { class: 't-value pos', text: fmtEUR(income) })
-      ]),
-      el('div', { class: 'tile' }, [
-        el('div', { class: 't-label', text: 'Expenses' }),
-        el('div', { class: 't-value neg', text: fmtEUR(expense) })
-      ])
-    );
-    root.append(tiles);
-
-    // Budget
     const bs = budgetStatus();
-    if (bs) root.append(budgetCard(bs));
+    const heroDaily = bs && bs.mode === 'daily' && bs.isCurrent;
+    const heroVal = heroDaily ? bs.todayRemaining : net;
+    root.append(el('div', { class: 'hero' }, [
+      el('div', { class: 'hero-label', text: heroDaily
+        ? (heroVal >= 0 ? 'Left to spend today' : 'Over budget today') : 'Net this month' }),
+      el('div', { class: 'hero-value ' + (heroVal > 0 ? 'pos' : heroVal < 0 ? 'neg' : ''),
+        text: fmtEUR(heroVal) }),
+      el('div', { class: 'hero-sub muted' }, [
+        el('span', { text: '↑ ' + fmtEUR(income) }),
+        el('span', { text: '↓ ' + fmtEUR(expense) }),
+        heroDaily ? el('span', { text: 'net ' + fmtEUR(net) }) : null
+      ])
+    ]));
+
+    if (bs) root.append(budgetCard(bs, heroDaily));
 
     // Top spending categories (compact) — full charts live in the Stats tab
     const byCat = new Map();
@@ -819,41 +824,23 @@
 
     root.append(el('div', { class: 'view-title' }, [el('h1', { text: 'Stats' })]));
 
-    // Range presets
-    const seg = el('div', { class: 'seg seg-4' });
-    [['month', 'Month'], ['year', 'Year'], ['all', 'All'], ['custom', 'Custom']].forEach(([val, lbl]) => {
-      seg.append(el('button', {
-        class: ui.stats.range === val ? 'active' : '', text: lbl,
-        onclick: () => {
-          ui.stats.range = val;
-          if (val === 'custom' && !ui.stats.from) {
-            const r = U.monthRange(ui.stats.y, ui.stats.m0);
-            ui.stats.from = r.from; ui.stats.to = r.to;
-          }
-          ui.stats.donutSel = null; renderStats();
-        }
-      }));
-    });
-    root.append(seg);
-
-    // Navigation / custom pickers
+    // One control row: ‹ period pill › — the pill opens the range picker
+    const nav = el('div', { class: 'month-nav' });
     if (rg.nav) {
-      const nav = el('div', { class: 'month-nav' });
       const prev = el('button', { class: 'mn-btn', text: '‹' });
-      const next = el('button', { class: 'mn-btn', text: '›' });
       prev.addEventListener('click', () => statsShift(-1));
-      next.addEventListener('click', () => statsShift(1));
-      nav.append(prev, el('div', { class: 'mn-label', text: rg.label }), next);
-      root.append(nav);
-    } else if (ui.stats.range === 'custom') {
-      const from = el('input', { type: 'date', value: ui.stats.from });
-      const to = el('input', { type: 'date', value: ui.stats.to });
-      from.addEventListener('change', () => { ui.stats.from = from.value; ui.stats.donutSel = null; renderStats(); });
-      to.addEventListener('change', () => { ui.stats.to = to.value; ui.stats.donutSel = null; renderStats(); });
-      root.append(el('div', { class: 'filterbar' }, [from, to]));
-    } else {
-      root.append(el('div', { class: 'stats-range-label muted', text: rg.label }));
+      nav.append(prev);
     }
+    nav.append(el('button', { class: 'mn-label pill', onclick: openStatsRangeSheet }, [
+      el('span', { text: rg.label }),
+      el('span', { class: 'pill-caret', text: '⌄' })
+    ]));
+    if (rg.nav) {
+      const next = el('button', { class: 'mn-btn', text: '›' });
+      next.addEventListener('click', () => statsShift(1));
+      nav.append(next);
+    }
+    root.append(nav);
 
     // View switcher — keeps Stats focused instead of one endless page
     const vseg = el('div', { class: 'seg seg-4', style: 'margin-bottom:12px' });
@@ -948,60 +935,47 @@
         label: 'Other', icon: '•', color: '#898781' });
     }
 
-    const donutCard = el('div', { class: 'card' }, [el('h2', { text: 'Spending by category' })]);
-    if (items.length === 0) {
-      donutCard.append(el('div', { class: 'empty', html: '<span class="big">🍩</span>No expenses in this period' }));
-    } else {
-      if (ui.stats.donutSel && !items.some((d) => d.id === ui.stats.donutSel)) ui.stats.donutSel = null;
-      const wrap = el('div', { class: 'chart-wrap' });
-      const legend = el('div', { class: 'legend' });
-      const drawDonut = () => {
-        const sel = items.find((d) => d.id === ui.stats.donutSel);
-        Charts.donut(wrap, items, {
-          selectedId: ui.stats.donutSel,
-          onSelect: (id) => { ui.stats.donutSel = id; drawDonut(); },
-          centerLabel: sel ? sel.label : 'Expenses',
-          centerValue: fmtEUR(sel ? sel.value : expense)
-        });
-        legend.innerHTML = '';
-        for (const d of items) {
-          const pct = expense > 0 ? Math.round((d.value / expense) * 100) : 0;
-          legend.append(el('button', {
-            class: 'legend-row' + (ui.stats.donutSel && ui.stats.donutSel !== d.id ? ' dim' : ''),
-            onclick: () => { ui.stats.donutSel = ui.stats.donutSel === d.id ? null : d.id; drawDonut(); }
-          }, [
-            el('span', { class: 'dot', style: 'background:' + d.color }),
-            el('span', { class: 'l-name' }, [el('span', { text: d.icon }), el('span', { class: 'nm', text: d.label })]),
-            el('span', { class: 'l-val', text: fmtEUR(d.value) }),
-            el('span', { class: 'l-pct', text: pct + '%' })
-          ]));
-        }
-      };
-      drawDonut();
-      donutCard.append(wrap, legend);
+    // One card: donut + the full category list, which doubles as the legend
+    // (the old separate legend + "All categories" card said the same thing twice)
+    const donutCard = el('div', { class: 'card' }, [
+      el('div', { class: 'card-head' }, [
+        el('h2', { text: 'Spending by category' }),
+        el('span', { class: 'muted', text: byCat.size + ' categories' })
+      ])
+    ]);
+    if (!items.length) {
+      donutCard.append(el('div', { class: 'empty', html:
+        '<span class="big">○</span>No expenses in this period' }));
+      root.append(donutCard);
+      return;
     }
-    root.append(donutCard);
-
-    // All categories for the period (not just the top few) — tap for the detail sheet
+    if (ui.stats.donutSel && !items.some((d) => d.id === ui.stats.donutSel)) ui.stats.donutSel = null;
+    const wrap = el('div', { class: 'chart-wrap' });
+    const list = el('div');
     const allCats = [...byCat.entries()]
-      .map(([id, value]) => ({ cat: DB.category(id), value }))
+      .map(([id, value]) => ({ cat: DB.category(id), id, value }))
       .sort((a, b) => b.value - a.value);
-    if (allCats.length) {
-      const listCard = el('div', { class: 'card' }, [
-        el('div', { class: 'card-head' }, [
-          el('h2', { text: 'All categories' }),
-          el('span', { class: 'muted', text: allCats.length + ' total' })
-        ])
-      ]);
-      const maxV = allCats[0].value;
-      allCats.forEach(({ cat, value }) => {
+    const maxV = allCats[0].value;
+
+    const draw = () => {
+      const sel = items.find((d) => d.id === ui.stats.donutSel);
+      Charts.donut(wrap, items, {
+        selectedId: ui.stats.donutSel,
+        onSelect: (id) => { ui.stats.donutSel = id; draw(); },
+        centerLabel: sel ? sel.label : 'Expenses',
+        centerValue: fmtEUR(sel ? sel.value : expense)
+      });
+      list.innerHTML = '';
+      allCats.forEach(({ cat, id, value }) => {
         const color = U.colorOf(cat ? cat.color : 'blue');
         const share = expense > 0 ? Math.round((value / expense) * 100) : 0;
-        listCard.append(el('button', {
-          class: 'catbar',
+        const dim = ui.stats.donutSel && ui.stats.donutSel !== id &&
+          items.some((d) => d.id === id);
+        list.append(el('button', {
+          class: 'catbar' + (dim ? ' dim' : ''),
           onclick: () => openCategoryDetail(cat, { from: rg.from, to: rg.to }, rg.label)
         }, [
-          el('span', { class: 'catbar-icon', text: cat ? cat.icon : '❓',
+          el('span', { class: 'catbar-icon', text: cat ? cat.icon : '?',
             style: 'background:' + U.tintOf(cat ? cat.color : 'blue') }),
           el('div', { class: 'catbar-main' }, [
             el('div', { class: 'catbar-top' }, [
@@ -1017,8 +991,10 @@
           el('span', { class: 'catbar-chev', text: '›' })
         ]));
       });
-      root.append(listCard);
-    }
+    };
+    draw();
+    donutCard.append(wrap, list);
+    root.append(donutCard);
   }
 
   /* ---------------- Calendar heatmap ---------------- */
@@ -1683,6 +1659,47 @@
     ]);
   }
 
+  function openStatsRangeSheet() {
+    openSheet('Period', (body, api) => {
+      const pick = (val) => async () => {
+        ui.stats.range = val;
+        if (val === 'custom' && !ui.stats.from) {
+          const r = U.monthRange(ui.stats.y, ui.stats.m0);
+          ui.stats.from = r.from; ui.stats.to = r.to;
+        }
+        ui.stats.donutSel = null;
+        api.close(); renderStats();
+      };
+      [['month', 'This month', 'One month at a time'],
+       ['year', 'Year', 'A whole year, month by month'],
+       ['all', 'All time', 'Everything you have recorded'],
+       ['custom', 'Custom range', 'Pick your own dates']].forEach(([val, title, sub]) => {
+        body.append(el('button', { class: 'pick-row', onclick: pick(val) }, [
+          el('div', { class: 's-main' }, [
+            el('div', { text: title }),
+            el('div', { class: 's-sub', text: sub })
+          ]),
+          el('span', { class: 'pick-check', text: ui.stats.range === val ? '✓' : '' })
+        ]));
+      });
+      if (ui.stats.range === 'custom') {
+        const from = el('input', { type: 'date', value: ui.stats.from });
+        const to = el('input', { type: 'date', value: ui.stats.to });
+        const apply = () => {
+          if (!from.value || !to.value || from.value > to.value) return;
+          ui.stats.from = from.value; ui.stats.to = to.value;
+          ui.stats.donutSel = null; renderStats();
+        };
+        from.addEventListener('change', apply);
+        to.addEventListener('change', apply);
+        body.append(el('hr', { class: 'sep' }), el('div', { class: 'field-row' }, [
+          el('div', { class: 'field' }, [el('label', { text: 'From' }), from]),
+          el('div', { class: 'field' }, [el('label', { text: 'To' }), to])
+        ]));
+      }
+    });
+  }
+
   function statsShift(delta) {
     if (ui.stats.range === 'year') {
       ui.stats.y += delta;
@@ -1729,7 +1746,7 @@
 
     root.append(el('div', { class: 'view-title' }, [
       el('h1', { text: 'Transactions' }),
-      el('button', { class: 'btn small', text: '⬇︎ CSV', onclick: () => exportCSV(list) })
+      el('button', { class: 'btn small', text: 'Export CSV', onclick: () => exportCSV(list) })
     ]));
 
     const search = el('input', {
@@ -2396,16 +2413,16 @@
             'Paste your bank statement into a text file, convert it with sync/paste_to_sync.py ' +
             '(runs on this phone in a-Shell — see sync/README.md), then import the result here. ' +
             'Re-imports merge — never duplicate.' }),
-          el('button', { class: 'btn block primary', text: '🏦 Import statement file',
+          el('button', { class: 'btn block primary', text: 'Import statement file',
             onclick: importBankSync }));
         if (reviewN > 0) {
           b.append(el('div', { class: 'spacer' }),
-            el('button', { class: 'btn block', text: '🏷 Review queue (' + reviewN + ')',
+            el('button', { class: 'btn block', text: 'Review queue (' + reviewN + ')',
               onclick: openReviewSheet }));
         }
         b.append(el('hr', { class: 'sep' }),
           el('div', { class: 'sub-title', text: 'Bank CSV' }),
-          el('button', { class: 'btn block', text: '📄 Import bank CSV…', onclick: openCsvWizard }));
+          el('button', { class: 'btn block', text: 'Import bank CSV', onclick: openCsvWizard }));
         if (DB.state.presets.length) {
           b.append(el('div', { class: 'muted', style: 'margin-top:10px', text: 'Saved presets:' }));
           DB.state.presets.forEach((p) => {
@@ -2448,7 +2465,7 @@
           snapAt ? 'Last snapshot: ' + new Date(snapAt).toLocaleString('it-IT') +
             ' · keeping the newest ' + SNAPSHOT_KEEP + '.'
             : 'No snapshot yet — one is taken shortly after your next change.' }));
-        b.append(el('button', { class: 'btn block', text: '🕘 Restore a snapshot…',
+        b.append(el('button', { class: 'btn block', text: 'Restore a snapshot',
           onclick: openSnapshotsSheet }));
 
         /* --- linked file (desktop browsers only) --- */
@@ -2464,7 +2481,7 @@
           b.append(
             el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:10px', text:
               'Every change is written to “' + linked.name + '” automatically.' }),
-            el('button', { class: 'btn block', text: '🔄 Re-enable after a restart',
+            el('button', { class: 'btn block', text: 'Re-enable after restart',
               onclick: reauthorizeFile }),
             el('div', { class: 'spacer' }),
             el('button', { class: 'btn block ghost', text: 'Unlink file', onclick: unlinkBackupFile })
@@ -2473,7 +2490,7 @@
           b.append(
             el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:10px', text:
               'Pick a file once — the app then overwrites it silently on every change.' }),
-            el('button', { class: 'btn block primary', text: '🔗 Link an auto-backup file',
+            el('button', { class: 'btn block primary', text: 'Link a backup file',
               onclick: linkBackupFile })
           );
         }
@@ -2485,11 +2502,11 @@
             'Snapshots live on this device, so they can’t survive a lost phone or iOS clearing ' +
             'storage. Export a file now and then and keep it somewhere safe.' +
             (last ? ' Last export: ' + new Date(last).toLocaleDateString('it-IT') + '.' : '') }),
-          el('button', { class: 'btn block primary', text: '⬇︎ Export backup (JSON)', onclick: exportJSON }),
+          el('button', { class: 'btn block primary', text: 'Export backup', onclick: exportJSON }),
           el('div', { class: 'spacer' }),
-          el('button', { class: 'btn block', text: '🔐 Export encrypted backup', onclick: exportEncrypted }),
+          el('button', { class: 'btn block', text: 'Export encrypted', onclick: exportEncrypted }),
           el('div', { class: 'spacer' }),
-          el('button', { class: 'btn block', text: '⬆︎ Import backup (JSON)', onclick: importJSON }),
+          el('button', { class: 'btn block', text: 'Import backup', onclick: importJSON }),
           el('p', { class: 'muted', style: 'margin-top:8px;line-height:1.5', text:
             'Encrypted files are safe to keep in iCloud or email — but the password is never ' +
             'stored, so if you forget it the backup is gone for good.' }),
@@ -2506,7 +2523,7 @@
         b.append(
           el('p', { class: 'muted', style: 'line-height:1.5', text:
             'Opens straight into a new transaction. iOS can’t set this up automatically, so pick the spot you want:' }),
-          el('button', { class: 'btn block', style: 'margin-top:12px', text: '📋 Copy quick-add link',
+          el('button', { class: 'btn block', style: 'margin-top:12px', text: 'Copy quick-add link',
             onclick: copyAddLink }),
           el('hr', { class: 'sep' }),
           el('div', { class: 'howto' }, [
@@ -2741,7 +2758,7 @@
         el('div', { class: 'reminder-hero', text: '💾' }),
         el('p', { class: 'reminder-msg', text: msg }),
         el('button', {
-          class: 'btn block primary', text: '⬇︎ Export backup now',
+          class: 'btn block primary', text: 'Export backup now',
           onclick: async () => { await exportJSON(); api.close(); }
         }),
         el('div', { class: 'spacer' }),
@@ -2970,7 +2987,7 @@
       }));
       if (review) {
         body.append(el('button', {
-          class: 'btn block primary', text: '🏷 Review them now',
+          class: 'btn block primary', text: 'Review them now',
           onclick: () => { api.close(); openReviewSheet(); }
         }), el('div', { class: 'spacer' }));
       }
@@ -3034,7 +3051,7 @@
           ' didn’t match any rule. Tap one to give it a category — and optionally teach a rule for next time.' }));
         body.append(el('button', {
           class: 'btn block small', style: 'margin-bottom:12px',
-          text: '⚡ Apply existing rules to all',
+          text: 'Apply existing rules to all',
           onclick: async () => {
             const n = await applyRulesToUncategorized();
             toast(n ? n + ' categorized by rules' : 'No rules matched these yet');
@@ -3528,7 +3545,7 @@
             `This file has ${data.transactions.length} transactions and ${data.accounts.length} accounts. ` +
             'Combine it with what’s already on this device, or replace everything?' }),
           el('button', {
-            class: 'btn block primary', text: '➕ Merge with current data',
+            class: 'btn block primary', text: 'Merge with current data',
             onclick: async () => {
               api.close();
               const res = await mergeBackup(data);
@@ -3551,7 +3568,7 @@
             'Merge keeps both sets, matches categories & accounts by name, and skips duplicate transactions.' }),
           el('hr', { class: 'sep' }),
           el('button', {
-            class: 'btn block danger', text: '♻︎ Replace everything',
+            class: 'btn block danger', text: 'Replace everything',
             onclick: async () => {
               api.close();
               if (!(await confirmSheet(

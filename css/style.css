@@ -118,9 +118,14 @@ h2 { font-size: 1.05rem; }
   color: var(--muted);
   border-radius: 10px;
 }
-.tabbar button .ticon { font-size: 1.3rem; line-height: 1.1; opacity: 0.5; }
+.tabbar button .ticon {
+  width: 23px; height: 23px;
+  fill: none; stroke: currentColor; stroke-width: 1.9;
+  stroke-linecap: round; stroke-linejoin: round;
+  opacity: 0.75;
+}
 .tabbar button.active { color: var(--accent); font-weight: 600; }
-.tabbar button.active .ticon { opacity: 1; }
+.tabbar button.active .ticon { opacity: 1; stroke-width: 2.1; }
 
 /* Floating add button, above the tab bar in the corner */
 .fab-corner {
@@ -131,12 +136,13 @@ h2 { font-size: 1.05rem; }
   border-radius: 50%;
   background: var(--accent);
   color: var(--accent-ink);
-  font-size: 2rem;
-  font-weight: 300;
-  line-height: 1;
   display: flex; align-items: center; justify-content: center;
   box-shadow: 0 6px 18px rgba(37, 106, 191, 0.45);
   z-index: 45;
+}
+.fab-corner svg {
+  width: 26px; height: 26px;
+  fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round;
 }
 .fab-corner:active { transform: scale(0.94); }
 @media (min-width: 561px) {
@@ -1078,3 +1084,35 @@ hr.sep { border: none; border-top: 1px solid var(--hairline); margin: 12px 0; }
   pointer-events: auto;
 }
 #toast-action { pointer-events: none; }
+
+/* ============ Home hero ============ */
+.hero { text-align: center; padding: 6px 0 20px; }
+.hero-label { font-size: 0.8rem; font-weight: 600; color: var(--ink-2); }
+.hero-value {
+  font-size: 2.9rem; font-weight: 700; letter-spacing: -0.03em;
+  line-height: 1.1; margin: 2px 0 6px;
+}
+.hero-value.pos { color: var(--good); }
+.hero-value.neg { color: var(--bad); }
+.hero-sub { display: flex; justify-content: center; gap: 14px; font-size: 0.8rem; }
+
+/* Period pill (replaces the second segmented control in Stats) */
+.mn-label.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface); border: 1px solid var(--border);
+}
+.mn-label.pill:active { background: var(--surface-2); }
+.pill-caret { color: var(--muted); font-size: 0.85rem; }
+
+/* Picker rows inside sheets */
+.pick-row {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; text-align: left;
+  padding: 13px 4px;
+  border-bottom: 1px solid var(--hairline);
+}
+.pick-row:last-of-type { border-bottom: none; }
+.pick-row:active { background: var(--surface-2); }
+.pick-check { color: var(--accent); font-weight: 700; width: 16px; text-align: right; }
+
+.catbar.dim { opacity: 0.38; }
