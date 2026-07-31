@@ -320,6 +320,23 @@
 
   const activeTrip = () => tripForDate(U.todayISO());
 
+  /* A trip in a foreign currency should talk in that currency: while you're
+     there you compare prices locally, so show the local figure with the euro
+     value beside it rather than making you divide in your head. */
+  const tripHasFx = (trip) => !!(trip && trip.currency && trip.rate);
+  const toLocal = (trip, eur) => (tripHasFx(trip) ? eur / trip.rate : null);
+  /** Local amount when the trip has a currency, otherwise plain euro. */
+  function fmtTripMoney(trip, eur) {
+    const loc = toLocal(trip, eur);
+    return loc == null ? fmtEUR(eur) : U.fmtCur(loc, trip.currency);
+  }
+  /** "₺450,00 (≈ 11,84 €)" — both, for lines where the euro matters too. */
+  function fmtTripBoth(trip, eur) {
+    return tripHasFx(trip)
+      ? U.fmtCur(toLocal(trip, eur), trip.currency) + ' (≈ ' + fmtEUR(eur) + ')'
+      : fmtEUR(eur);
+  }
+
   /* ---- Per-category budgets: { categoryId: monthlyAmount } ---- */
   const catBudgets = () => DB.state.meta.categoryBudgets || {};
 
@@ -609,13 +626,17 @@
         el('div', { class: 'budget-today' }, [
           el('div', { class: 'bt-label', text: rem >= 0 ? 'Left for today on this trip'
             : 'Over the trip’s daily pace' }),
-          el('div', { class: 'bt-value ' + (rem >= 0 ? 'pos' : 'neg'), text: fmtEUR(rem) }),
-          el('div', { class: 'muted', text: tbs.daysLeft +
+          el('div', { class: 'bt-value ' + (rem >= 0 ? 'pos' : 'neg'),
+            text: fmtTripMoney(trip, rem) }),
+          el('div', { class: 'muted', text:
+            (tripHasFx(trip) ? '≈ ' + fmtEUR(rem) + ' · ' : '') + tbs.daysLeft +
             (tbs.daysLeft === 1 ? ' day left' : ' days left') })
         ]),
         meter(tbs.spent, tbs.budget),
         el('div', { class: 'muted', style: 'margin-top:6px', text:
-          fmtEUR(tbs.spent) + ' of ' + fmtEUR(tbs.budget) + ' · not counted in your monthly budget' })
+          fmtTripMoney(trip, tbs.spent) + ' of ' + fmtTripMoney(trip, tbs.budget) +
+          (tripHasFx(trip) ? ' (≈ ' + fmtEUR(tbs.spent) + ' of ' + fmtEUR(tbs.budget) + ')' : '') +
+          ' · not counted in your monthly budget' })
       ]));
     }
 
@@ -1810,9 +1831,10 @@
               ' · ' + t.days + ' days' })
           ]),
           el('div', { class: 'trip-right' }, [
-            el('div', { class: 'trip-amt', text: fmtEUR(t.spent) }),
+            el('div', { class: 'trip-amt', text: fmtTripMoney(tr, t.spent) }),
             tr.budget ? el('div', { class: 'trip-bud ' +
-              (t.spent > tr.budget ? 'neg' : 'muted'), text: 'of ' + fmtEUR(tr.budget) }) : null
+              (t.spent > tr.budget ? 'neg' : 'muted'),
+              text: 'of ' + fmtTripMoney(tr, tr.budget) }) : null
           ]),
           el('span', { class: 's-chev', text: '›' })
         ]));
@@ -1981,8 +2003,10 @@
     const groups = groupByMerchant(t.txs.filter((x) => x.type === 'expense'));
     openSheet((trip.emoji || '✈️') + ' ' + trip.name, (body) => {
       body.append(el('div', { class: 'cat-detail-head' }, [
-        el('div', { class: 'cat-detail-total', text: fmtEUR(t.spent) }),
-        el('div', { class: 'muted', text: t.days + ' days · ' + fmtEUR(t.perDay) + ' per day' })
+        el('div', { class: 'cat-detail-total', text: fmtTripMoney(trip, t.spent) }),
+        el('div', { class: 'muted', text:
+          (tripHasFx(trip) ? '≈ ' + fmtEUR(t.spent) + ' · ' : '') +
+          t.days + ' days · ' + fmtTripMoney(trip, t.perDay) + ' per day' })
       ]));
       const tb = tripBudgetStatus(trip);
       if (tb) {
@@ -1990,13 +2014,13 @@
           el('div', { class: 'budget-line' }, [
             el('span', { text: 'Trip budget' }),
             el('span', { class: tb.over ? 'neg' : 'pos',
-              text: fmtEUR(tb.spent) + ' / ' + fmtEUR(tb.budget) })
+              text: fmtTripMoney(trip, tb.spent) + ' / ' + fmtTripMoney(trip, tb.budget) })
           ]),
           meter(tb.spent, tb.budget),
           el('div', { class: 'muted', style: 'margin-top:6px', text: tb.over
-            ? fmtEUR(-tb.remaining) + ' over'
-            : fmtEUR(tb.remaining) + ' left' + (tb.active && tb.daysLeft
-                ? ' · ' + fmtEUR(tb.todayAllowance) + ' for today' : '') })
+            ? fmtTripBoth(trip, -tb.remaining) + ' over'
+            : fmtTripBoth(trip, tb.remaining) + ' left' + (tb.active && tb.daysLeft
+                ? ' · ' + fmtTripMoney(trip, tb.todayAllowance) + ' for today' : '') })
         ]));
       }
       body.append(el('button', { class: 'btn block ghost', style: 'margin-bottom:12px',

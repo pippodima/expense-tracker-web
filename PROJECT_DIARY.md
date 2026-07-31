@@ -690,3 +690,12 @@ Shipped:
 - Added a **scope check** to the verification routine: extract each sheet function and confirm
   every fx/field identifier it uses is declared inside it. That is the check that would have
   caught this, and it now passes for both functions.
+
+### Chapter 29 — Trip budgets speak the local currency (2026-07-31)
+Request: the trip daily budget should show what's left in the local currency, not just euro —
+while abroad you compare prices locally, not in converted euro.
+Shipped: `fmtTripMoney()` / `fmtTripBoth()` helpers, applied everywhere a trip figure appears.
+On the Home trip card the **local amount is now the headline** ("449,92 TRY left for today")
+with the euro underneath ("≈ 11,84 € · 5 days left"); the meter line, trip detail header,
+budget meter, remaining/today's allowance, and the trip list rows all show local with euro
+alongside. Trips without a currency are unchanged (plain euro), since the helpers fall back.
