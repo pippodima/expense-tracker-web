@@ -14,6 +14,20 @@ const U = (() => {
   }
 
   const fmtEUR = (n) => eurFmt.format(n || 0);
+  /** Format in any ISO currency code (falls back to "12,34 XYZ" if unknown). */
+  const curCache = {};
+  function fmtCur(n, code) {
+    if (!code || code === 'EUR') return fmtEUR(n);
+    try {
+      if (!curCache[code]) {
+        curCache[code] = new Intl.NumberFormat('it-IT', { style: 'currency', currency: code });
+      }
+      return curCache[code].format(n || 0);
+    } catch {
+      return new Intl.NumberFormat('it-IT', { minimumFractionDigits: 2 }).format(n || 0) +
+        ' ' + code;
+    }
+  }
   const fmtEURShort = (n) => (Math.abs(n) >= 1000 ? eurFmtNoCents.format(n) : eurFmt.format(n || 0));
   const fmtNum = (n) => numFmt.format(n || 0);
 
@@ -138,7 +152,7 @@ const U = (() => {
   }
 
   return {
-    uid, fmtEUR, fmtEURShort, fmtNum, todayISO, fmtDate, monthLabel, monthRange,
+    uid, fmtEUR, fmtCur, fmtEURShort, fmtNum, todayISO, fmtDate, monthLabel, monthRange,
     PALETTE, PALETTE_ORDER, colorOf, tintOf, isDark,
     $, $$, el, esc, toast, toastAction, download
   };

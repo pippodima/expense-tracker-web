@@ -438,9 +438,33 @@
         type: 'text', inputmode: 'decimal', placeholder: '0,00',
         value: b.amount ? String(b.amount).replace('.', ',') : ''
       });
-      const amountWrap = el('div', { class: 'amount-wrap' }, [
-        el('span', { class: 'cur', text: '€' }), amount
-      ]);
+      // While inside a foreign-currency trip, type the price as it appears locally
+      const fxTrip = existing
+        ? (tripForDate(existing.date) || null)
+        : activeTrip();
+      const fx = fxTrip && fxTrip.currency && fxTrip.rate ? fxTrip : null;
+      let useLocal = !!fx && (!existing || existing.origCurrency === fx.currency);
+      if (existing && existing.origAmount && useLocal) {
+        amount.value = String(existing.origAmount).replace('.', ',');
+      }
+      const curLabel = el('span', { class: 'cur', text: useLocal ? fx.currency : '€' });
+      const amountWrap = el('div', { class: 'amount-wrap' }, [curLabel, amount]);
+      const fxLine = el('div', { class: 'fx-line muted' });
+      const syncFx = () => {
+        if (!fx) { fxLine.textContent = ''; return; }
+        const v = CSV.parseAmount(amount.value) || 0;
+        curLabel.textContent = useLocal ? fx.currency : '€';
+        fxLine.innerHTML = '';
+        fxLine.append(
+          el('span', { text: useLocal
+            ? '≈ ' + fmtEUR(v * fx.rate) + '  (1 ' + fx.currency + ' = ' + fmtEUR(fx.rate) + ')'
+            : 'Entering euro directly' }),
+          el('button', { class: 'btn small ghost', text: useLocal ? 'Use €' : 'Use ' + fx.currency,
+            onclick: () => { useLocal = !useLocal; syncFx(); } })
+        );
+      };
+      amount.addEventListener('input', syncFx);
+      syncFx();
 
       let mode = b.mode || 'daily';
       const seg = el('div', { class: 'seg' });
@@ -1844,6 +1868,21 @@
       drawEmoji();
       const budget = el('input', { type: 'text', inputmode: 'decimal', placeholder: 'No budget',
         value: draft.budget ? String(draft.budget).replace('.', ',') : '' });
+      const cur = el('input', { type: 'text', placeholder: 'EUR', maxlength: '3',
+        autocapitalize: 'characters', value: draft.currency || '' });
+      const rate = el('input', { type: 'text', inputmode: 'decimal', placeholder: '1,00',
+        value: draft.rate ? String(draft.rate).replace('.', ',') : '' });
+      const rateHint = el('div', { class: 'note-suggest' });
+      const syncRate = () => {
+        const code = (cur.value || '').toUpperCase().trim();
+        const r = CSV.parseAmount(rate.value);
+        rateHint.textContent = code && code !== 'EUR' && r
+          ? '1 ' + code + ' = ' + fmtEUR(r) + ' · 100 ' + code + ' ≈ ' + fmtEUR(100 * r)
+          : (code && code !== 'EUR' ? 'Enter how many euro one ' + code + ' is worth.' : '');
+      };
+      cur.addEventListener('input', syncRate);
+      rate.addEventListener('input', syncRate);
+      syncRate();
       const preview = el('p', { class: 'muted', style: 'margin-bottom:12px' });
       const updatePreview = () => {
         const t = tripTotals({ from: from.value, to: to.value });
@@ -1860,6 +1899,11 @@
           el('div', { class: 'field' }, [el('label', { text: 'From' }), from]),
           el('div', { class: 'field' }, [el('label', { text: 'To' }), to])
         ]),
+        el('div', { class: 'field-row' }, [
+          el('div', { class: 'field' }, [el('label', { text: 'Currency' }), cur]),
+          el('div', { class: 'field' }, [el('label', { text: 'Rate (€ per unit)' }), rate])
+        ]),
+        rateHint,
         el('div', { class: 'field' }, [
           el('label', { text: 'Trip budget (€, optional)' }), budget,
           el('div', { class: 'note-suggest', text:
@@ -1873,11 +1917,25 @@
             if (!from.value || !to.value || from.value > to.value) return toast('Invalid dates');
             const list = (DB.state.meta.trips || []).filter((x) => x.id !== draft.id);
             const bud = CSV.parseAmount(budget.value);
-            list.push({ id: draft.id || U.uid(), name: name.value.trim(), emoji: draft.emoji,
+            const code = (cur.value || '').toUpperCase().trim();
+            const rt = CSV.parseAmount(rate.value);
+            if (code && code !== 'EUR' && (!rt || rt <= 0)) {
+              return toast('Enter the rate for ' + code);
+            }
+            const saved = {
+              id: draft.id || U.uid(), name: name.value.trim(), emoji: draft.emoji,
               from: from.value, to: to.value,
-              budget: bud != null && bud > 0 ? Math.round(bud * 100) / 100 : null });
+              budget: bud != null && bud > 0 ? Math.round(bud * 100) / 100 : null,
+              currency: code && code !== 'EUR' ? code : null,
+              rate: code && code !== 'EUR' ? rt : null
+            };
+            list.push(saved);
             await DB.setMeta('trips', list);
-            api.close(); toast('Trip saved'); renderStats();
+            const rateChanged = existing && existing.rate && saved.rate &&
+              Math.abs(existing.rate - saved.rate) > 1e-9;
+            api.close();
+            if (rateChanged) await offerRecompute(saved);
+            toast('Trip saved'); renderStats();
           } })
       );
       if (existing) {
@@ -1889,6 +1947,25 @@
           } }));
       }
     });
+  }
+
+  /** After changing a trip's rate, re-convert the amounts entered in that currency. */
+  async function offerRecompute(trip) {
+    const affected = DB.state.transactions.filter(
+      (t) => t.origCurrency === trip.currency && t.date >= trip.from && t.date <= trip.to);
+    if (!affected.length) return;
+    const ok = await confirmSheet(
+      `Recalculate ${affected.length} transaction${affected.length === 1 ? '' : 's'} entered in ` +
+      `${trip.currency} at the new rate (1 ${trip.currency} = ${fmtEUR(trip.rate)})?`,
+      'Recalculate', false);
+    if (!ok) return;
+    const upd = affected.map((t) => ({
+      ...t, rate: trip.rate, amount: Math.round(t.origAmount * trip.rate * 100) / 100
+    }));
+    await DB.bulkPut('transactions', upd);
+    await bumpChanges(upd.length);
+    toast(upd.length + ' amounts updated');
+    render();
   }
 
   function openTripDetail(trip) {
@@ -1916,6 +1993,11 @@
       }
       body.append(el('button', { class: 'btn block ghost', style: 'margin-bottom:12px',
         text: 'Edit trip', onclick: () => openTripSheet(trip) }));
+      if (trip.currency && trip.rate) {
+        body.append(el('p', { class: 'muted', style: 'margin-bottom:10px', text:
+          'Amounts converted at 1 ' + trip.currency + ' = ' + fmtEUR(trip.rate) +
+          ' · ' + U.fmtCur(t.spent / trip.rate, trip.currency) + ' spent locally' }));
+      }
       groups.forEach((g) => {
         body.append(el('div', { class: 'place-row', style: 'pointer-events:none' }, [
           el('div', { class: 'place-main' }, [
@@ -2449,7 +2531,16 @@
             delete draft.toAccountId;
             delete draft.needsReview;     // manually edited = reviewed
           }
-          draft.amount = Math.round(val * 100) / 100;
+          if (fx && useLocal) {
+            // Store EUR as the canonical amount, keep what was actually typed
+            draft.origAmount = Math.round(val * 100) / 100;
+            draft.origCurrency = fx.currency;
+            draft.rate = fx.rate;
+            draft.amount = Math.round(val * fx.rate * 100) / 100;
+          } else {
+            draft.amount = Math.round(val * 100) / 100;
+            delete draft.origAmount; delete draft.origCurrency; delete draft.rate;
+          }
           await DB.put('transactions', draft);
           if (draft.categoryId) await rememberCategoryPick(draft.categoryId);
           await bumpChanges(1);
@@ -2502,7 +2593,7 @@
       }
 
       body.append(
-        seg, amountWrap,
+        seg, amountWrap, fxLine,
         el('div', { class: 'field' }, [el('label', { text: 'Date' }), date]),
         el('div', { class: 'field' }, [acctLabel, acctChips]),
         toField,
@@ -2602,6 +2693,11 @@
         })
       );
       if (existing) {
+        body.append(
+          el('div', { class: 'spacer' }),
+          el('button', { class: 'btn block', text: 'Reconcile balance',
+            onclick: () => { api.close(); openReconcileSheet(existing); } })
+        );
         const n = DB.state.transactions.filter((t) => t.accountId === existing.id).length;
         body.append(
           el('div', { class: 'spacer' }),
@@ -2621,6 +2717,61 @@
           })
         );
       }
+    });
+  }
+
+  /** Cash drifts when you don't log every small purchase. Enter what you really
+      have and the difference is booked as one adjustment, so the account stops
+      lying without you having to remember each coffee. */
+  function openReconcileSheet(acct) {
+    const current = DB.accountBalance(acct.id);
+    openSheet('Reconcile ' + acct.name, (body, api) => {
+      const actual = el('input', { type: 'text', inputmode: 'decimal',
+        placeholder: current.toFixed(2).replace('.', ',') });
+      const diffLine = el('p', { class: 'muted', style: 'line-height:1.5;margin:10px 0' });
+      const catSel = el('select', {}, orderedCategories().map((c) =>
+        el('option', { value: c.id, text: c.icon + ' ' + c.name })));
+      const catField = el('div', { class: 'field' },
+        [el('label', { text: 'Book the difference as' }), catSel]);
+
+      const update = () => {
+        const v = CSV.parseAmount(actual.value);
+        if (v == null) { diffLine.textContent = ''; catField.style.display = 'none'; return; }
+        const diff = Math.round((current - v) * 100) / 100;
+        catField.style.display = diff > 0 ? '' : 'none';
+        diffLine.textContent = diff > 0
+          ? 'You have ' + fmtEUR(diff) + ' less than recorded — that becomes one expense.'
+          : diff < 0
+            ? 'You have ' + fmtEUR(-diff) + ' more than recorded — that becomes income.'
+            : 'Everything already matches.';
+      };
+      actual.addEventListener('input', update);
+
+      body.append(
+        el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:12px', text:
+          'Recorded balance is ' + fmtEUR(current) + '. Enter what you actually have and ' +
+          'the gap (untracked spending) is recorded in one go.' }),
+        el('div', { class: 'field' }, [el('label', { text: 'Actual balance (€)' }), actual]),
+        diffLine, catField,
+        el('button', { class: 'btn block primary', text: 'Adjust', onclick: async () => {
+          const v = CSV.parseAmount(actual.value);
+          if (v == null) return toast('Enter the actual balance');
+          const diff = Math.round((current - v) * 100) / 100;
+          if (diff === 0) { api.close(); return toast('Already up to date'); }
+          await DB.put('transactions', {
+            id: null, date: U.todayISO(), amount: Math.abs(diff),
+            type: diff > 0 ? 'expense' : 'income',
+            categoryId: diff > 0 ? catSel.value
+              : (DB.state.categories.find((c) => c.name === 'Other') || DB.state.categories[0]).id,
+            accountId: acct.id,
+            note: diff > 0 ? 'Cash spending (reconciled)' : 'Cash adjustment (reconciled)'
+          });
+          await bumpChanges(1);
+          api.close(); toast('Balance reconciled'); render();
+        } })
+      );
+      update();
+      setTimeout(() => actual.focus(), 320);
     });
   }
 
@@ -3399,11 +3550,29 @@
       }
       // No externalId match — adopt a matching hand-entered transaction if there is one.
       const signedR = type === 'expense' ? -amount : amount;
-      const bucket = adoptable.get(r.date + '|' + signedR.toFixed(2));
+      let bucket = adoptable.get(r.date + '|' + signedR.toFixed(2));
+      // Foreign-currency entries were converted with your own rate, so the bank's
+      // euro amount won't match to the cent — accept a close match for those.
+      if (!bucket || !bucket.length) {
+        for (const [k, list] of adoptable) {
+          if (!list.length || k.slice(0, 10) !== r.date) continue;
+          const cand = list.find((t) => t.origCurrency &&
+            t.type === type && Math.abs(t.amount - amount) / Math.max(amount, 0.01) < 0.05);
+          if (cand) { bucket = [cand]; break; }
+        }
+      }
       if (bucket && bucket.length) {
         const adopt = bucket.shift();
-        // Keep the user's category/note/account; attach the bank id so future syncs update it.
-        toPut.push({ ...adopt, externalId: r.externalId });
+        // Keep the user's category/note/account; attach the bank id so future syncs
+        // update it. For a converted entry the bank's euro amount is the real one.
+        const merged = { ...adopt, externalId: r.externalId };
+        if (adopt.origCurrency && Math.abs(adopt.amount - amount) > 0.005) {
+          merged.amount = amount;
+          if (adopt.origAmount) {
+            merged.rate = Math.round((amount / adopt.origAmount) * 1e6) / 1e6;
+          }
+        }
+        toPut.push(merged);
         byExternal.set(r.externalId, adopt);
         merged++;
         continue;
@@ -4503,7 +4672,9 @@
         categoryId: (cat || fallback).id,
         accountId: st.accountId,
         note: desc,
-        _suggested: !!cat
+        _suggested: !!cat,
+        // Money leaving the bank with a withdrawal wording: probably cash, not spending
+        _withdrawal: signed < 0 && Detect.looksWithdrawal(desc)
       });
     }
 
@@ -4515,6 +4686,57 @@
         (invalid ? `<span class="dup">${invalid} rows skipped (no valid date/amount)</span><br>` : '') +
         `<span class="dup">${good.filter((g) => g._suggested).length} auto-categorized by your rules</span>`;
       body.append(summary);
+
+      // --- Cash withdrawals: offer to book them as transfers to a cash account ---
+      const cashAccts = DB.state.accounts.filter((a) => a.type === 'cash');
+      const wset = Object.assign({ mode: 'transfer', toAccountId: (cashAccts[0] || {}).id },
+        DB.state.meta.withdrawalSettings || {});
+      const withdrawals = good.filter((g) => g._withdrawal);
+      if (withdrawals.length) {
+        const card = el('div', { class: 'card' }, [
+          el('div', { class: 'card-head' }, [
+            el('h2', { text: 'Cash withdrawals' }),
+            el('span', { class: 'muted', text: withdrawals.length + ' found' })
+          ]),
+          el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:10px', text:
+            'These look like cash coming out of the bank rather than money spent. Booking ' +
+            'them as transfers keeps your balances right and avoids counting the same money ' +
+            'twice when you log what the cash was spent on.' })
+        ]);
+        const seg = el('div', { class: 'seg', style: 'margin-bottom:10px' });
+        const bT = el('button', { text: 'Transfer to cash' });
+        const bE = el('button', { text: 'Treat as expense' });
+        const acctSel = el('select', {}, DB.state.accounts.map((a) =>
+          el('option', { value: a.id, text: acctIcon(a.type) + ' ' + a.name })));
+        if (wset.toAccountId) acctSel.value = wset.toAccountId;
+        acctSel.addEventListener('change', () => { wset.toAccountId = acctSel.value; });
+        const acctField = el('div', { class: 'field' },
+          [el('label', { text: 'Cash goes to' }), acctSel]);
+        const syncW = () => {
+          bT.className = wset.mode === 'transfer' ? 'active' : '';
+          bE.className = wset.mode === 'expense' ? 'active' : '';
+          acctField.style.display = wset.mode === 'transfer' ? '' : 'none';
+        };
+        bT.addEventListener('click', () => { wset.mode = 'transfer'; syncW(); });
+        bE.addEventListener('click', () => { wset.mode = 'expense'; syncW(); });
+        syncW(); seg.append(bT, bE);
+        card.append(seg, acctField);
+        // Each row can be opted out — protects against a false positive
+        withdrawals.forEach((g) => {
+          const cb = el('input', { type: 'checkbox' });
+          cb.checked = true;
+          cb.addEventListener('change', () => { g._withdrawal = cb.checked; });
+          card.append(el('label', { class: 'switch-row' }, [
+            el('div', { class: 's-main' }, [
+              el('div', { text: g.note.slice(0, 34) || 'Withdrawal' }),
+              el('div', { class: 's-sub', text: U.fmtDate(g.date) + ' · ' + fmtEUR(g.amount) })
+            ]),
+            cb
+          ]));
+        });
+        body.append(card);
+        st._wset = wset;
+      }
 
       if (good.length) {
         const prev = el('div', { class: 'csv-preview' });
@@ -4545,7 +4767,22 @@
           text: good.length ? 'Import ' + good.length + ' transactions' : 'Nothing to import',
           onclick: async () => {
             if (!good.length) return;
-            good.forEach((g) => delete g._suggested);
+            const wcfg = st._wset;
+            if (wcfg && wcfg.mode === 'transfer' && wcfg.toAccountId) {
+              good.forEach((g) => {
+                if (!g._withdrawal || g.type !== 'expense') return;
+                if (wcfg.toAccountId === g.accountId) return;   // can't transfer to itself
+                g.type = 'transfer';
+                g.toAccountId = wcfg.toAccountId;
+                g.categoryId = null;
+                delete g.needsReview;
+              });
+              await DB.setMeta('withdrawalSettings',
+                { mode: wcfg.mode, toAccountId: wcfg.toAccountId });
+            } else if (wcfg) {
+              await DB.setMeta('withdrawalSettings', { mode: 'expense' });
+            }
+            good.forEach((g) => { delete g._suggested; delete g._withdrawal; });
             await DB.bulkPut('transactions', good);
             await bumpChanges(good.length);
             api.close();

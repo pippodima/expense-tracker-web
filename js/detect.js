@@ -209,6 +209,23 @@ const Detect = (() => {
     return bestScore > 0.9 ? best : null;
   }
 
+  /* ---- Cash withdrawals ----
+     A withdrawal is not spending: it moves money from the bank to your pocket.
+     Deliberately conservative — bare "ATM" is NOT a match, because ATM is also
+     Milan's transport operator and would swallow travel tickets. A withdrawal
+     word must be present. */
+  const WITHDRAWAL_WORDS = ['prelievo', 'prelevamento', 'prelev', 'bancomat',
+    'withdrawal', 'withdraw', 'cash advance', 'retrait', 'abhebung', 'geldautomat',
+    'cajero', 'retirada', 'contante atm', 'cash out'];
+
+  function looksWithdrawal(note) {
+    const v = norm(note);
+    if (!v) return false;
+    if (WITHDRAWAL_WORDS.some((w) => v.includes(w))) return true;
+    // "ATM" only counts alongside an explicit cash/withdrawal hint
+    return /\batm\b/.test(v) && /\b(cash|contant|withdraw|prelie)/.test(v);
+  }
+
   /**
    * Decide the date convention for a column of values.
    * Returns 'iso' | 'dmy' | 'mdy' | 'text', plus `ambiguous` when both D/M and
@@ -372,7 +389,7 @@ const Detect = (() => {
 
   return {
     detectColumns, detectDateFormat, parseDateSmart, detectAmountFormat, parseAmountSmart,
-    findHeaderRow, findRecordArray, detectDirectionColumn, classifyDirection,
+    findHeaderRow, findRecordArray, detectDirectionColumn, classifyDirection, looksWithdrawal,
     looksDate, looksAmount, headerScore, norm
   };
 })();

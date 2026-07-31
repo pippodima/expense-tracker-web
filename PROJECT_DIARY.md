@@ -634,3 +634,30 @@ Shipped a third import mode, "Amount + type":
   with the bank preset for next time.
 - Verified 3/3 end-to-end (Italian Uscita/Entrata, English Expense/Income, D/C letters) plus
   13 classification cases and a no-false-positive check against a Category column.
+
+### Chapter 26 — Cash withdrawals + foreign-currency trips (2026-07-31)
+Two features the user proposed; both were analysed for trade-offs first, then built to their
+choices ("sometimes/roughly" cash tracking, confirm-in-preview detection, one editable rate
+per trip, foreign currency only inside trips).
+**Cash withdrawals.** Before: a withdrawal imported as a plain expense, so withdrawing €100
+and later logging €30 of cash purchases counted €130 spent. Now the importer flags likely
+withdrawals and offers to book them as **transfers to a cash account** (reusing the transfer
+type), with a per-row opt-out and the choice remembered.
+Detection is deliberately conservative: a withdrawal word must be present (prelievo, bancomat,
+withdrawal, retrait, abhebung…), and **bare "ATM" never matches** — the user's own data has an
+`ATM ` → Transport rule because ATM is Milan's transport operator. Verified 11 cases including
+those false positives.
+Because cash spending is only logged "roughly", accounts also gained **Reconcile balance**:
+enter what you actually have and the gap is booked as a single adjustment, so a cash account
+can't drift forever.
+**Foreign-currency trips.** A trip can carry a `currency` + `rate` (€ per unit). While inside
+that trip the add sheet takes the amount in the local currency with a live "≈ €" preview and a
+one-tap switch back to euro. **EUR stays canonical** (`amount`), with `origAmount`/
+`origCurrency`/`rate` kept alongside, so every existing budget/stat calculation is untouched.
+Editing the trip's rate later offers to **recompute** that trip's converted amounts.
+Honest limit stated in-app: rates are entered by hand — the app makes no network calls, so it
+cannot fetch live rates.
+The duplicate risk flagged during analysis proved real (manual €29,50 vs bank €29,68), so
+bank-sync adoption now accepts a **close match (<5%) for converted entries** and takes the
+bank's euro figure as authoritative, back-calculating the true rate. Verified 15 cases across
+both features.

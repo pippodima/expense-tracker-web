@@ -1206,3 +1206,9 @@ hr.sep { border: none; border-top: 1px solid var(--hairline); margin: 12px 0; }
 }
 .typemap-row .seg { flex: 0 0 auto; width: 168px; }
 .typemap-row .seg button { min-height: 34px; font-size: 0.78rem; }
+
+/* Foreign-currency hint under the amount field */
+.fx-line {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-size: 0.8rem; margin-bottom: 10px; min-height: 32px;
+}
