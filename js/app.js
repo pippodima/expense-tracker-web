@@ -438,33 +438,9 @@
         type: 'text', inputmode: 'decimal', placeholder: '0,00',
         value: b.amount ? String(b.amount).replace('.', ',') : ''
       });
-      // While inside a foreign-currency trip, type the price as it appears locally
-      const fxTrip = existing
-        ? (tripForDate(existing.date) || null)
-        : activeTrip();
-      const fx = fxTrip && fxTrip.currency && fxTrip.rate ? fxTrip : null;
-      let useLocal = !!fx && (!existing || existing.origCurrency === fx.currency);
-      if (existing && existing.origAmount && useLocal) {
-        amount.value = String(existing.origAmount).replace('.', ',');
-      }
-      const curLabel = el('span', { class: 'cur', text: useLocal ? fx.currency : '€' });
-      const amountWrap = el('div', { class: 'amount-wrap' }, [curLabel, amount]);
-      const fxLine = el('div', { class: 'fx-line muted' });
-      const syncFx = () => {
-        if (!fx) { fxLine.textContent = ''; return; }
-        const v = CSV.parseAmount(amount.value) || 0;
-        curLabel.textContent = useLocal ? fx.currency : '€';
-        fxLine.innerHTML = '';
-        fxLine.append(
-          el('span', { text: useLocal
-            ? '≈ ' + fmtEUR(v * fx.rate) + '  (1 ' + fx.currency + ' = ' + fmtEUR(fx.rate) + ')'
-            : 'Entering euro directly' }),
-          el('button', { class: 'btn small ghost', text: useLocal ? 'Use €' : 'Use ' + fx.currency,
-            onclick: () => { useLocal = !useLocal; syncFx(); } })
-        );
-      };
-      amount.addEventListener('input', syncFx);
-      syncFx();
+      const amountWrap = el('div', { class: 'amount-wrap' }, [
+        el('span', { class: 'cur', text: '€' }), amount
+      ]);
 
       let mode = b.mode || 'daily';
       const seg = el('div', { class: 'seg' });
@@ -2470,9 +2446,33 @@
         type: 'text', inputmode: 'decimal', placeholder: '0,00', autocomplete: 'off',
         value: existing ? existing.amount.toFixed(2).replace('.', ',') : ''
       });
-      const amountWrap = el('div', { class: 'amount-wrap' }, [
-        el('span', { class: 'cur', text: '€' }), amount
-      ]);
+      // While inside a foreign-currency trip, type the price as it appears locally
+      const fxTrip = existing
+        ? (tripForDate(existing.date) || null)
+        : activeTrip();
+      const fx = fxTrip && fxTrip.currency && fxTrip.rate ? fxTrip : null;
+      let useLocal = !!fx && (!existing || existing.origCurrency === fx.currency);
+      if (existing && existing.origAmount && useLocal) {
+        amount.value = String(existing.origAmount).replace('.', ',');
+      }
+      const curLabel = el('span', { class: 'cur', text: useLocal ? fx.currency : '€' });
+      const amountWrap = el('div', { class: 'amount-wrap' }, [curLabel, amount]);
+      const fxLine = el('div', { class: 'fx-line muted' });
+      const syncFx = () => {
+        if (!fx) { fxLine.textContent = ''; return; }
+        const v = CSV.parseAmount(amount.value) || 0;
+        curLabel.textContent = useLocal ? fx.currency : '€';
+        fxLine.innerHTML = '';
+        fxLine.append(
+          el('span', { text: useLocal
+            ? '≈ ' + fmtEUR(v * fx.rate) + '  (1 ' + fx.currency + ' = ' + fmtEUR(fx.rate) + ')'
+            : 'Entering euro directly' }),
+          el('button', { class: 'btn small ghost', text: useLocal ? 'Use €' : 'Use ' + fx.currency,
+            onclick: () => { useLocal = !useLocal; syncFx(); } })
+        );
+      };
+      amount.addEventListener('input', syncFx);
+      syncFx();
 
       // Date
       const date = el('input', { type: 'date', value: draft.date });

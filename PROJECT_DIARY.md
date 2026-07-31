@@ -675,3 +675,18 @@ Shipped:
   needs four decimals. Switching direction converts the value in place; the canonical stored
   rate is always € per unit, so nothing downstream changed. The hint previews both ways
   ("100 TL ≈ 2,63 € · 10 € ≈ 380 TL").
+
+### Chapter 28 — Fix: add-transaction sheet rendered only the repeat chips (2026-07-31)
+Reported: tapping + showed only "Repeat a frequent one" and nothing else.
+Cause — my own bad edit in Chapter 26. The foreign-currency block was inserted by matching
+the first `amount-wrap` in the file, which belongs to **`openBudgetSheet`**, not
+`openTxSheet`. So the budget sheet held code referencing `existing`/`fx` (undefined there),
+while the transaction sheet appended an `fxLine` that didn't exist in its scope — a
+ReferenceError mid-build, leaving only the fields appended before it.
+Note: `node --check` passes on this happily, since it's a scope error, not a syntax error.
+Shipped:
+- Moved the whole fx block into `openTxSheet` and restored `openBudgetSheet`'s plain amount
+  field.
+- Added a **scope check** to the verification routine: extract each sheet function and confirm
+  every fx/field identifier it uses is declared inside it. That is the check that would have
+  caught this, and it now passes for both functions.
