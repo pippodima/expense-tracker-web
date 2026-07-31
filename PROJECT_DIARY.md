@@ -661,3 +661,17 @@ The duplicate risk flagged during analysis proved real (manual €29,50 vs bank 
 bank-sync adoption now accepts a **close match (<5%) for converted entries** and takes the
 bank's euro figure as authoritative, back-calculating the true rate. Verified 15 cases across
 both features.
+
+### Chapter 27 — Fix: exchange rates parsed as money (2026-07-31)
+Bug reported from real use: setting a Turkish Lira rate of `0.018` made 100 TL show as
+thousands of euro. Cause — the rate field used the *money* parser, which reads three digits
+after a separator as thousands grouping (`1.234` = 1234, correct for money), so `0.018`
+became **18**: a 1000× error.
+Shipped:
+- `U.parseRate()`: for rates both `.` and `,` are decimal points and there is no thousands
+  grouping, so `0.018` stays 0,018 and `1.234` stays 1,234. Verified 8 cases.
+- Rate entry now has a **direction toggle** — `1 € = ? TL` or `1 TL = ? €` — because for weak
+  currencies the first reads straight off an exchange board (1 € = 38 TL) while the inverse
+  needs four decimals. Switching direction converts the value in place; the canonical stored
+  rate is always € per unit, so nothing downstream changed. The hint previews both ways
+  ("100 TL ≈ 2,63 € · 10 € ≈ 380 TL").

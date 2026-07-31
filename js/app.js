@@ -1870,16 +1870,50 @@
         value: draft.budget ? String(draft.budget).replace('.', ',') : '' });
       const cur = el('input', { type: 'text', placeholder: 'EUR', maxlength: '3',
         autocapitalize: 'characters', value: draft.currency || '' });
-      const rate = el('input', { type: 'text', inputmode: 'decimal', placeholder: '1,00',
-        value: draft.rate ? String(draft.rate).replace('.', ',') : '' });
+      // Rates can be entered either way round — "1 € = 38 TL" is much easier to
+      // read off a board than "1 TL = 0,0263 €", and both store the same number.
+      let rateMode = draft.rateMode || 'perEur';
+      const rate = el('input', { type: 'text', inputmode: 'decimal', placeholder: '0',
+        value: draft.rate
+          ? String(rateMode === 'perEur'
+              ? Math.round((1 / draft.rate) * 1e6) / 1e6 : draft.rate).replace('.', ',')
+          : '' });
+      const dirSeg = el('div', { class: 'seg', style: 'margin-bottom:8px' });
+      const bPerEur = el('button', {});
+      const bPerUnit = el('button', {});
       const rateHint = el('div', { class: 'note-suggest' });
-      const syncRate = () => {
-        const code = (cur.value || '').toUpperCase().trim();
-        const r = CSV.parseAmount(rate.value);
-        rateHint.textContent = code && code !== 'EUR' && r
-          ? '1 ' + code + ' = ' + fmtEUR(r) + ' · 100 ' + code + ' ≈ ' + fmtEUR(100 * r)
-          : (code && code !== 'EUR' ? 'Enter how many euro one ' + code + ' is worth.' : '');
+      const rateLabel = el('label', { text: 'Exchange rate' });
+
+      const canonicalRate = () => {
+        const v = U.parseRate(rate.value);
+        if (!v) return null;
+        return rateMode === 'perEur' ? 1 / v : v;   // stored as € per unit
       };
+      const syncRate = () => {
+        const code = (cur.value || '').toUpperCase().trim() || 'XXX';
+        bPerEur.textContent = '1 € = ? ' + code;
+        bPerUnit.textContent = '1 ' + code + ' = ? €';
+        bPerEur.className = rateMode === 'perEur' ? 'active' : '';
+        bPerUnit.className = rateMode === 'perUnit' ? 'active' : '';
+        const r = canonicalRate();
+        rateHint.textContent = r
+          ? '100 ' + code + ' ≈ ' + fmtEUR(100 * r) + '  ·  10 € ≈ ' +
+            U.fmtCur(10 / r, code === 'XXX' ? null : code)
+          : 'Enter the rate you see on the board.';
+      };
+      bPerEur.addEventListener('click', () => {
+        const r = canonicalRate();
+        rateMode = 'perEur';
+        if (r) rate.value = String(Math.round((1 / r) * 1e6) / 1e6).replace('.', ',');
+        syncRate();
+      });
+      bPerUnit.addEventListener('click', () => {
+        const r = canonicalRate();
+        rateMode = 'perUnit';
+        if (r) rate.value = String(Math.round(r * 1e6) / 1e6).replace('.', ',');
+        syncRate();
+      });
+      dirSeg.append(bPerEur, bPerUnit);
       cur.addEventListener('input', syncRate);
       rate.addEventListener('input', syncRate);
       syncRate();
@@ -1899,11 +1933,8 @@
           el('div', { class: 'field' }, [el('label', { text: 'From' }), from]),
           el('div', { class: 'field' }, [el('label', { text: 'To' }), to])
         ]),
-        el('div', { class: 'field-row' }, [
-          el('div', { class: 'field' }, [el('label', { text: 'Currency' }), cur]),
-          el('div', { class: 'field' }, [el('label', { text: 'Rate (€ per unit)' }), rate])
-        ]),
-        rateHint,
+        el('div', { class: 'field' }, [el('label', { text: 'Currency' }), cur]),
+        el('div', { class: 'field' }, [rateLabel, dirSeg, rate, rateHint]),
         el('div', { class: 'field' }, [
           el('label', { text: 'Trip budget (€, optional)' }), budget,
           el('div', { class: 'note-suggest', text:
@@ -1918,7 +1949,7 @@
             const list = (DB.state.meta.trips || []).filter((x) => x.id !== draft.id);
             const bud = CSV.parseAmount(budget.value);
             const code = (cur.value || '').toUpperCase().trim();
-            const rt = CSV.parseAmount(rate.value);
+            const rt = canonicalRate();
             if (code && code !== 'EUR' && (!rt || rt <= 0)) {
               return toast('Enter the rate for ' + code);
             }
@@ -1927,7 +1958,8 @@
               from: from.value, to: to.value,
               budget: bud != null && bud > 0 ? Math.round(bud * 100) / 100 : null,
               currency: code && code !== 'EUR' ? code : null,
-              rate: code && code !== 'EUR' ? rt : null
+              rate: code && code !== 'EUR' ? rt : null,
+              rateMode
             };
             list.push(saved);
             await DB.setMeta('trips', list);

@@ -31,6 +31,20 @@ const U = (() => {
   const fmtEURShort = (n) => (Math.abs(n) >= 1000 ? eurFmtNoCents.format(n) : eurFmt.format(n || 0));
   const fmtNum = (n) => numFmt.format(n || 0);
 
+  /** Parse an exchange rate. Unlike money, a rate never groups thousands, so
+      both '.' and ',' are decimal points — "0.018" must stay 0,018 and not
+      become 18 the way a money parser would read "1.234" as 1234. */
+  function parseRate(str) {
+    let s = String(str == null ? '' : str).trim().replace(/\s/g, '');
+    if (!s) return null;
+    const lastSep = Math.max(s.lastIndexOf(','), s.lastIndexOf('.'));
+    if (lastSep >= 0) {
+      s = s.slice(0, lastSep).replace(/[.,]/g, '') + '.' + s.slice(lastSep + 1);
+    }
+    const n = Number(s);
+    return isFinite(n) && n > 0 ? n : null;
+  }
+
   /** 'YYYY-MM-DD' for today (local time). */
   function todayISO() {
     const d = new Date();
@@ -152,7 +166,7 @@ const U = (() => {
   }
 
   return {
-    uid, fmtEUR, fmtCur, fmtEURShort, fmtNum, todayISO, fmtDate, monthLabel, monthRange,
+    uid, parseRate, fmtEUR, fmtCur, fmtEURShort, fmtNum, todayISO, fmtDate, monthLabel, monthRange,
     PALETTE, PALETTE_ORDER, colorOf, tintOf, isDark,
     $, $$, el, esc, toast, toastAction, download
   };
