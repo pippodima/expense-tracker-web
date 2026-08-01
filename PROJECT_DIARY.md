@@ -699,3 +699,51 @@ On the Home trip card the **local amount is now the headline** ("449,92 TRY left
 with the euro underneath ("≈ 11,84 € · 5 days left"); the meter line, trip detail header,
 budget meter, remaining/today's allowance, and the trip list rows all show local with euro
 alongside. Trips without a currency are unchanged (plain euro), since the helpers fall back.
+
+### Chapter 30 — Trends: how spending moves across months (2026-08-01)
+Request: more graphs — especially how categories vary month to month — plus a view on what
+else is worth plotting. Overview answers *where did this month go*; nothing answered *is that
+normal*, which is the question that actually changes behaviour. So Stats gained a fifth tab,
+**Trends**, entirely month-over-month with a 6 / 12 / 24-month window.
+
+Six cards, each earning its place:
+- **Categories over time** — stacked bars, top 6 categories + Other. Tapping a legend chip
+  isolates one category as plain bars with a caption comparing this month against its own
+  average ("Shopping · 244,14 € this month vs 102,88 € average (+137%)").
+- **What changed** — each category's latest month against the mean of the *3 preceding*
+  months, not just the previous one, so a single odd month doesn't read as a trend. Sparkline
+  per row; tap opens that category's month.
+- **Pace this month** — cumulative day-by-day curves for this month vs last (plus the budget
+  as a straight diagonal). The only chart that answers "am I running hotter *at this point*
+  in the month"; the current curve stops at today rather than flat-lining into the future.
+- **Fixed vs one-off** — confirmed subscriptions against everything else. Hides itself until
+  at least one subscription is confirmed, rather than showing an all-blue chart.
+- **Savings rate** — share of income kept per month; hidden unless ≥2 months have income.
+- **Weekday rhythm** — average spend per weekday, counting every elapsed day so quiet days
+  pull the average down honestly.
+
+New chart primitives in `charts.js`: `stackedBars` (2px surface gaps, only the top segment
+rounded), `multiLine` (shared axis, dashed comparison series, partial series allowed so a
+half-finished month simply stops), and `sparkline` for list rows.
+
+Verified by extracting the real `statsTrends`/`trendMonths` from `app.js` and running them
+against a fake DOM with a 14-month synthetic dataset — all rAF callbacks forced so every
+chart actually draws. 27 checks across three window lengths, category isolation, an empty
+window, and single-month data (no previous month to compare against): all pass, no NaN and
+no `undefined` in any rendered text.
+
+### Chapter 31 — One backup file instead of twenty (2026-08-01)
+Reported: every export writes a new file because the name carries the date, so the folder
+fills up. Two causes, both fixed:
+- **The name.** Backups are now `expense-tracker-backup.json`, fixed. Version history already
+  lives in device snapshots, so dating the file bought nothing. A Settings toggle ("Add the
+  date to the file name") restores the old behaviour for anyone who wants separate copies.
+- **The mechanism.** A plain `<a download>` on iPhone lands in Safari's Downloads folder and
+  silently numbers duplicates — a fixed name alone wouldn't have helped. New `U.saveFile()`
+  routes through the **Web Share sheet** on touch devices without `showSaveFilePicker`, where
+  "Save to Files" into the same folder offers **Replace**. Desktop keeps the plain download.
+  Cancelling the sheet no longer counts as a completed backup (`lastBackup` stays put) and no
+  longer double-saves; a lost user gesture (e.g. after the encryption password prompt) falls
+  back to the download path.
+Verified with a util.js harness across five environments — desktop Chrome, macOS Safari,
+iPhone, cancelled sheet, lost gesture — plus name-rule checks. 17/17 pass.

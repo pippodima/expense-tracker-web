@@ -165,9 +165,41 @@ const U = (() => {
     setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 4000);
   }
 
+  /* On iPhone a plain download lands in Safari's Downloads folder and duplicate
+     names get silently numbered — which is how you end up with twenty backups.
+     The share sheet instead lets you pick the folder, and saving over a file of
+     the same name offers "Replace". Desktop keeps the normal download (a share
+     sheet there would be worse), detected by the pointer + missing save picker. */
+  const wantsShare = () => !!(
+    navigator.canShare && navigator.share &&
+    typeof window.showSaveFilePicker !== 'function' &&
+    window.matchMedia && window.matchMedia('(pointer: coarse)').matches
+  );
+
+  /** Returns 'shared' | 'downloaded' | 'cancelled'. */
+  async function saveFile(filename, text, mime) {
+    const type = mime || 'application/octet-stream';
+    if (wantsShare()) {
+      try {
+        const file = new File([text], filename, { type });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file] });
+          return 'shared';
+        }
+      } catch (e) {
+        // Cancelling the sheet is a decision, not a failure — don't also download.
+        if (e && (e.name === 'AbortError' || e.name === 'NotAllowedError')) {
+          return e.name === 'AbortError' ? 'cancelled' : (download(filename, text, mime), 'downloaded');
+        }
+      }
+    }
+    download(filename, text, mime);
+    return 'downloaded';
+  }
+
   return {
     uid, parseRate, fmtEUR, fmtCur, fmtEURShort, fmtNum, todayISO, fmtDate, monthLabel, monthRange,
     PALETTE, PALETTE_ORDER, colorOf, tintOf, isDark,
-    $, $$, el, esc, toast, toastAction, download
+    $, $$, el, esc, toast, toastAction, download, saveFile, wantsShare
   };
 })();

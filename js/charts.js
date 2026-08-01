@@ -302,6 +302,226 @@ const Charts = (() => {
   }
 
   /**
+   * Stacked bars — one column per bucket, segments in series order (bottom up).
+   * buckets: [{ tick, label, <seriesKey>: value }]. series: [{ key, color, label }].
+   * A 2px surface gap separates segments; only the top segment is rounded.
+   */
+  function stackedBars(container, buckets, series, opts) {
+    const { height = 210, formatValue = String } = opts || {};
+    const width = Math.max(280, container.clientWidth || 320);
+    const pad = { top: 12, right: 6, bottom: 22, left: 46 };
+    const plotW = width - pad.left - pad.right;
+    const plotH = height - pad.top - pad.bottom;
+    const totalOf = (b) => series.reduce((s, x) => s + (b[x.key] || 0), 0);
+    const max = niceMax(Math.max(...buckets.map(totalOf), 0));
+
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    const grid = css('--hairline'), axis = css('--muted');
+
+    const ticks = 4;
+    for (let i = 0; i <= ticks; i++) {
+      const y = pad.top + plotH - (plotH * i) / ticks;
+      const line = document.createElementNS(NS, 'line');
+      line.setAttribute('x1', pad.left); line.setAttribute('x2', width - pad.right);
+      line.setAttribute('y1', y); line.setAttribute('y2', y);
+      line.setAttribute('stroke', i === 0 ? css('--border') : grid);
+      line.setAttribute('stroke-width', '1');
+      svg.appendChild(line);
+      const label = document.createElementNS(NS, 'text');
+      label.setAttribute('x', pad.left - 6); label.setAttribute('y', y + 3);
+      label.setAttribute('text-anchor', 'end'); label.setAttribute('font-size', '9');
+      label.setAttribute('fill', axis);
+      label.setAttribute('style', 'font-variant-numeric: tabular-nums');
+      label.textContent = U.fmtNum((max * i) / ticks);
+      svg.appendChild(label);
+    }
+
+    const n = buckets.length;
+    const band = plotW / Math.max(n, 1);
+    const barW = Math.min(24, Math.max(4, band - 6));
+    const maxLabels = Math.floor(plotW / 34);
+    const step = Math.max(1, Math.ceil(n / maxLabels));
+    const base = pad.top + plotH;
+
+    buckets.forEach((bk, i) => {
+      const x = pad.left + band * i + (band - barW) / 2;
+      let acc = 0;
+      // Top-most non-empty segment gets the rounded data-end
+      let topKey = null;
+      for (const s of series) if ((bk[s.key] || 0) > 0) topKey = s.key;
+      series.forEach((s) => {
+        const v = bk[s.key] || 0;
+        if (v <= 0) return;
+        const h = max > 0 ? (v / max) * plotH : 0;
+        const yTop = base - ((acc + v) / max) * plotH;
+        acc += v;
+        const gap = h > 4 ? 2 : 0;                 // surface gap, skipped on slivers
+        const hh = Math.max(1, h - gap);
+        const p = document.createElementNS(NS, 'path');
+        if (s.key === topKey) {
+          const rr = Math.min(4, barW / 2, hh);
+          p.setAttribute('d',
+            `M ${x} ${yTop + hh} L ${x} ${yTop + rr} Q ${x} ${yTop} ${x + rr} ${yTop} ` +
+            `L ${x + barW - rr} ${yTop} Q ${x + barW} ${yTop} ${x + barW} ${yTop + rr} ` +
+            `L ${x + barW} ${yTop + hh} Z`);
+        } else {
+          p.setAttribute('d', `M ${x} ${yTop} h ${barW} v ${hh} h ${-barW} Z`);
+        }
+        p.setAttribute('fill', s.color);
+        svg.appendChild(p);
+      });
+
+      const hit = document.createElementNS(NS, 'rect');
+      hit.setAttribute('x', pad.left + band * i); hit.setAttribute('y', pad.top);
+      hit.setAttribute('width', band); hit.setAttribute('height', plotH);
+      hit.setAttribute('fill', 'transparent');
+      hit.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const parts = series.filter((s) => (bk[s.key] || 0) > 0)
+          .sort((a, b) => (bk[b.key] || 0) - (bk[a.key] || 0)).slice(0, 4)
+          .map((s) => s.label + ' ' + formatValue(bk[s.key]));
+        showTip(container, e, bk.label + ' · ' + formatValue(totalOf(bk)) +
+          (parts.length ? ' — ' + parts.join(', ') : ''));
+      });
+      svg.appendChild(hit);
+
+      if (i % step === 0) {
+        const label = document.createElementNS(NS, 'text');
+        label.setAttribute('x', pad.left + band * i + band / 2);
+        label.setAttribute('y', height - 6);
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('font-size', '9'); label.setAttribute('fill', axis);
+        label.textContent = bk.tick;
+        svg.appendChild(label);
+      }
+    });
+
+    container.innerHTML = '';
+    container.appendChild(svg);
+    svg.addEventListener('click', () => hideTip(container));
+  }
+
+  /**
+   * Several lines sharing one x axis (comparisons: this month vs last, budget pace).
+   * series: [{ label, color, dash?, points: [{ tick, label, value }] }] — points
+   * may be shorter than the axis (a partial month simply stops early).
+   */
+  function multiLine(container, series, opts) {
+    const { height = 200, formatValue = String, suffix = '' } = opts || {};
+    const width = Math.max(280, container.clientWidth || 320);
+    const pad = { top: 14, right: 12, bottom: 22, left: 46 };
+    const plotW = width - pad.left - pad.right;
+    const plotH = height - pad.top - pad.bottom;
+    const nx = Math.max(...series.map((s) => s.points.length), 1);
+    const all = series.flatMap((s) => s.points.map((p) => p.value));
+    let lo = Math.min(0, ...all), hi = Math.max(0, ...all);
+    if (lo === hi) hi = lo + 1;
+    const span = hi - lo;
+
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    const grid = css('--hairline'), axis = css('--muted');
+    const yOf = (v) => pad.top + plotH * (hi - v) / span;
+    const xOf = (i) => (nx <= 1 ? pad.left + plotW / 2 : pad.left + (plotW * i) / (nx - 1));
+
+    [hi, (hi + lo) / 2, lo].forEach((gv) => {
+      const y = yOf(gv);
+      const l = document.createElementNS(NS, 'line');
+      l.setAttribute('x1', pad.left); l.setAttribute('x2', width - pad.right);
+      l.setAttribute('y1', y); l.setAttribute('y2', y);
+      l.setAttribute('stroke', gv === 0 ? css('--border') : grid);
+      l.setAttribute('stroke-width', '1');
+      svg.appendChild(l);
+      const t = document.createElementNS(NS, 'text');
+      t.setAttribute('x', pad.left - 6); t.setAttribute('y', y + 3);
+      t.setAttribute('text-anchor', 'end'); t.setAttribute('font-size', '9');
+      t.setAttribute('fill', axis);
+      t.setAttribute('style', 'font-variant-numeric: tabular-nums');
+      t.textContent = U.fmtNum(gv) + suffix;
+      svg.appendChild(t);
+    });
+
+    series.forEach((s) => {
+      if (!s.points.length) return;
+      const pts = s.points.map((p, i) => [xOf(i), yOf(p.value)]);
+      const d = pts.map((p, i) => (i ? 'L' : 'M') + p[0] + ' ' + p[1]).join(' ');
+      const path = document.createElementNS(NS, 'path');
+      path.setAttribute('d', d); path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', s.color);
+      path.setAttribute('stroke-width', s.dash ? '1.5' : '2');
+      if (s.dash) path.setAttribute('stroke-dasharray', '4 4');
+      path.setAttribute('stroke-linejoin', 'round'); path.setAttribute('stroke-linecap', 'round');
+      svg.appendChild(path);
+      if (!s.dash) {
+        const last = pts[pts.length - 1];
+        const dot = document.createElementNS(NS, 'circle');
+        dot.setAttribute('cx', last[0]); dot.setAttribute('cy', last[1]); dot.setAttribute('r', '4');
+        dot.setAttribute('fill', s.color);
+        dot.setAttribute('stroke', css('--surface')); dot.setAttribute('stroke-width', '2');
+        svg.appendChild(dot);
+      }
+    });
+
+    // One hit target per x slot, reporting every series that reaches it
+    const ticksSrc = series.reduce((a, b) => (b.points.length >= a.points.length ? b : a), series[0]);
+    for (let i = 0; i < nx; i++) {
+      const hit = document.createElementNS(NS, 'rect');
+      const w = nx > 1 ? plotW / nx : plotW;
+      hit.setAttribute('x', xOf(i) - w / 2); hit.setAttribute('y', pad.top);
+      hit.setAttribute('width', w); hit.setAttribute('height', plotH);
+      hit.setAttribute('fill', 'transparent');
+      hit.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const head = (ticksSrc.points[i] || {}).label || '';
+        showTip(container, e, head + ' · ' + series
+          .filter((s) => s.points[i])
+          .map((s) => s.label + ' ' + formatValue(s.points[i].value)).join('  '));
+      });
+      svg.appendChild(hit);
+      const p = ticksSrc.points[i];
+      if (p && (nx <= 12 || i % Math.ceil(nx / 8) === 0)) {
+        const t = document.createElementNS(NS, 'text');
+        t.setAttribute('x', xOf(i)); t.setAttribute('y', height - 6);
+        t.setAttribute('text-anchor', 'middle'); t.setAttribute('font-size', '9');
+        t.setAttribute('fill', axis);
+        t.textContent = p.tick;
+        svg.appendChild(t);
+      }
+    }
+
+    container.innerHTML = '';
+    container.appendChild(svg);
+    svg.addEventListener('click', () => hideTip(container));
+  }
+
+  /** Tiny inline trend line for list rows. Returns the <svg> element. */
+  function sparkline(values, opts) {
+    const { color = css('--accent'), width = 56, height = 20 } = opts || {};
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    svg.setAttribute('class', 'spark');
+    const hi = Math.max(...values, 0.0001), lo = 0;
+    const n = values.length;
+    const xOf = (i) => (n <= 1 ? width / 2 : (width * i) / (n - 1));
+    const yOf = (v) => height - 2 - ((v - lo) / (hi - lo || 1)) * (height - 4);
+    const d = values.map((v, i) => (i ? 'L' : 'M') + xOf(i) + ' ' + yOf(v)).join(' ');
+    const path = document.createElementNS(NS, 'path');
+    path.setAttribute('d', d); path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', color); path.setAttribute('stroke-width', '1.5');
+    path.setAttribute('stroke-linejoin', 'round'); path.setAttribute('stroke-linecap', 'round');
+    svg.appendChild(path);
+    const dot = document.createElementNS(NS, 'circle');
+    dot.setAttribute('cx', xOf(n - 1)); dot.setAttribute('cy', yOf(values[n - 1] || 0));
+    dot.setAttribute('r', '2'); dot.setAttribute('fill', color);
+    svg.appendChild(dot);
+    return svg;
+  }
+
+  /**
    * Line chart with a zero baseline (supports negatives), 10% area wash, end marker.
    * points: [{ tick, value, label }]. color is the series hue.
    */
@@ -393,5 +613,5 @@ const Charts = (() => {
     svg.addEventListener('click', () => hideTip(container));
   }
 
-  return { donut, bars, groupedBars, line };
+  return { donut, bars, groupedBars, stackedBars, line, multiLine, sparkline };
 })();
