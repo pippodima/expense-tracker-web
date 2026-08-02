@@ -5,7 +5,7 @@
   const { $, $$, el, esc, fmtEUR, toast } = U;
 
   /* ================= App state (UI only — data lives in DB.state) ========= */
-  const now = new Date();
+  let now = new Date();
   const ui = {
     view: 'dashboard',
     period: { type: 'month', y: now.getFullYear(), m0: now.getMonth() }, // or {type:'range', from, to}
@@ -1056,6 +1056,27 @@
     ui.stats.y = ly; ui.stats.m0 = lm - 1; ui.stats.donutSel = null;
   }
 
+  /** A home-screen PWA sits suspended for days rather than reloading, so the
+      "today" captured at load goes stale. Across a month boundary that leaves
+      Home and Stats sitting on last month while calling it "this month". Roll
+      them forward on resume — but only if they were still following the current
+      month, never if you deliberately navigated somewhere else. */
+  function refreshToday() {
+    const fresh = new Date();
+    const wasY = now.getFullYear(), wasM = now.getMonth();
+    if (fresh.getFullYear() === wasY && fresh.getMonth() === wasM) return false;
+    now = fresh;
+    if (ui.period.type === 'month' && ui.period.y === wasY && ui.period.m0 === wasM) {
+      ui.period = { type: 'month', y: now.getFullYear(), m0: now.getMonth() };
+      ui.donutSel = null;
+    }
+    if (ui.stats.range === 'month' && ui.stats.y === wasY && ui.stats.m0 === wasM) {
+      ui.stats.y = now.getFullYear(); ui.stats.m0 = now.getMonth();
+      ui.stats.donutSel = null;
+    }
+    return true;
+  }
+
   function openRangeSheet() {
     openSheet('Period', (body, api) => {
       const r = periodRange();
@@ -1222,8 +1243,8 @@
       ])
     ]));
 
-    if (txs.length === 0) {
-      root.append(el('div', { class: 'empty', html: '<span class="big">📊</span>No transactions in this period' }));
+    if (income === 0 && expense === 0) {
+      root.append(statsEmptyNote(rg));
       return;
     }
 
@@ -1336,6 +1357,77 @@
     draw();
     donutCard.append(wrap, list);
     root.append(donutCard);
+  }
+
+  /** An all-zero Overview has four very different causes and used to look
+      identical in each: a month you simply haven't recorded yet, a month whose
+      spending all belongs to a trip that stats deliberately hide, a month holding
+      only transfers, and an empty app. Say which one it is, and offer the way out. */
+  function statsEmptyNote(rg) {
+    const inRange = DB.state.transactions.filter((t) => t.date >= rg.from && t.date <= rg.to);
+    const hidden = inRange.filter((t) => !countsInStats(t));
+    const box = el('div', { class: 'card empty-note' });
+    const head = (icon, title, msg) => box.append(
+      el('div', { class: 'empty-note-icon', text: icon }),
+      el('h2', { text: title }),
+      el('p', { class: 'muted', text: msg })
+    );
+
+    if (hidden.length) {
+      const names = [...new Set(hidden.map((t) => (tripForDate(t.date) || {}).name).filter(Boolean))];
+      const spent = hidden.reduce((s, t) => s + t.amount, 0);
+      head('✈️', 'It’s all trip spending',
+        fmtEUR(spent) + ' across ' + hidden.length + ' transaction' +
+        (hidden.length === 1 ? '' : 's') + ' here belong to ' +
+        (names.length ? names.join(', ') : 'a trip') + '. Trips are kept out of monthly ' +
+        'stats on purpose, so a holiday doesn’t skew your normal baseline.');
+      box.append(
+        el('button', { class: 'btn block primary', text: 'See the trip',
+          onclick: () => { ui.stats.view = 'trips'; renderStats(); } }),
+        el('div', { class: 'spacer' }),
+        el('button', { class: 'btn block', text: 'Count trips in stats instead',
+          onclick: async () => {
+            await DB.setMeta('tripSettings',
+              Object.assign({}, tripSettings(), { excludeFromStats: false }));
+            render();
+          } })
+      );
+      return box;
+    }
+
+    if (inRange.length) {
+      head('⇄', 'Only transfers here',
+        inRange.length + ' movement' + (inRange.length === 1 ? '' : 's') + ' in this period, ' +
+        'all between your own accounts. Transfers never count as income or expense — the ' +
+        'money didn’t leave your pocket.');
+      box.append(el('button', { class: 'btn block', text: 'See them in Activity',
+        onclick: () => {
+          ui.tx = Object.assign({}, ui.tx, { from: rg.from, to: rg.to, q: '', limit: 100 });
+          show('transactions');
+        } }));
+      return box;
+    }
+
+    // Nothing at all in range — point at the month that does have something
+    const counted = DB.state.transactions.filter((t) => t.type !== 'transfer' && countsInStats(t));
+    const latest = counted.reduce((mx, t) => (t.date > mx ? t.date : mx), '');
+    if (latest && latest < rg.from) {
+      const ly = Number(latest.slice(0, 4)), lm = Number(latest.slice(5, 7)) - 1;
+      head('🗓', 'Nothing in ' + rg.label + ' yet',
+        'A new period starts empty. Add something, or look back at the last month that ' +
+        'has data.');
+      box.append(el('button', { class: 'btn block primary', text: 'Go to ' + U.monthLabel(ly, lm),
+        onclick: () => {
+          ui.stats.range = 'month'; ui.stats.y = ly; ui.stats.m0 = lm;
+          ui.stats.donutSel = null; renderStats();
+        } }));
+      return box;
+    }
+
+    head('📊', 'No transactions in this period',
+      counted.length ? 'Try a different period from the pill above.'
+        : 'Add your first transaction with the + button and this fills in.');
+    return box;
   }
 
   /* ---------------- Trends: how spending moves across months ----------------
@@ -5300,6 +5392,7 @@
     if (!launched) maybeRemindBackup();
     window.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
+        if (refreshToday()) render();      // a new month started while suspended
         if (!handleLaunchAction()) maybeRemindBackup();
       }
     });

@@ -747,3 +747,31 @@ fills up. Two causes, both fixed:
   back to the download path.
 Verified with a util.js harness across five environments — desktop Chrome, macOS Safari,
 iPhone, cancelled sheet, lost gesture — plus name-rule checks. 17/17 pass.
+
+### Chapter 32 — A new month shouldn't look like a broken app (2026-08-03)
+Reported: August started and the Stats overview shows nothing but zeros. Zeros can mean four
+completely different things and the app rendered them identically, so the honest fix was to
+make the empty state say *which* it is:
+- **Nothing recorded yet** — offers a one-tap jump to the most recent month that has data.
+- **It's all trip spending** — names the trip and the hidden total ("65,00 € across 2
+  transactions belong to Istanbul"), then offers *See the trip* or *Count trips in stats
+  instead*. This one was genuinely invisible before: trip exclusion is deliberate, but a
+  silent deliberate exclusion is indistinguishable from a bug.
+- **Only transfers** — money moved between your own accounts, which is never income or
+  expense; links to those movements in Activity.
+- **Empty app** — invites the first transaction instead of showing an error-shaped screen.
+The trigger changed from `txs.length === 0` to `income === 0 && expense === 0`, which is what
+"looks empty" actually means — a month of nothing but transfers used to slip past it and show
+a wall of zero tiles.
+
+Also fixed a real month-boundary bug found while looking: `now` was captured once at load, but
+a home-screen PWA sits **suspended for days rather than reloading**. Resume it after the 1st
+and Home/Stats were still on last month while labelling it "this month". `refreshToday()` now
+runs on resume and rolls both forward — but only if they were still following the current
+month, never if you had deliberately navigated elsewhere, and never for a custom range or
+all-time.
+
+Verified by running the real `statsEmptyNote`, the trip-exclusion helpers and `refreshToday`
+against a fake DOM: 23 checks over all four empty causes (including a confirmed subscription
+during a trip, which must *not* be reported as hidden trip spending), the buttons' actual
+side-effects, and four rollover cases. All pass.
