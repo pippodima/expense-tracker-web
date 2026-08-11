@@ -775,3 +775,36 @@ Verified by running the real `statsEmptyNote`, the trip-exclusion helpers and `r
 against a fake DOM: 23 checks over all four empty causes (including a confirmed subscription
 during a trip, which must *not* be reported as hidden trip spending), the buttons' actual
 side-effects, and four rollover cases. All pass.
+
+### Chapter 33 — The daily budget that couldn't move (2026-08-03)
+Reported: adding an expense for a past day doesn't update the daily budget — noticed while
+travelling. I reproduced it before touching anything, running the real `budgetStatus` and
+`tripBudgetStatus` against pinned dates. The redistribution maths turned out to be correct in
+every scenario, which made the actual defect a UI one:
+
+**While a budgeted trip is running, Home's hero shows the *monthly* allowance — the one number
+trip spending can never touch.**
+```
+after adding 100 € dated yesterday, mid-trip:
+  monthly (the hero): 20,69 €  →  20,69 €     unmoved, by design
+  trip (a card below): 50,00 €  →  37,50 €     correct all along
+```
+So the headline was frozen no matter what you entered. The trip now takes the hero whenever
+one is active and budgeted (in its local currency, euro beneath), and the trip card below
+collapses to a "Today 12,50 € / 37,50 €" line instead of repeating it — the same treatment
+`budgetCard` already gets when the hero shows today.
+
+**A second, genuine hole found while testing:** expenses dated *after* today counted in the
+month total but in neither `spentBefore` nor `spentToday`, so a rent booked ahead inflated
+every remaining day's allowance until the day it arrived. Both budgets now reserve it
+(`committedAhead`), and the trip card names it ("160,00 € already booked on later days").
+
+**And the reason it read as "not updated" even when it did move:** 50 € added to a past day
+changes today by 50/29 = 1,72 €, because that is what spreading an overspend over the days
+left *means*. The budget card now spells it out:
+`▼ 0,39 € vs the 19,35 € base — 50,00 € spent earlier, spread over the 29 days left.`
+
+**Tests now live in the repo** (`node tests/run.js`) instead of a scratchpad that gets wiped:
+syntax, a **scope check** over 23 render/money functions (the Chapter 28 class of bug, which
+`node --check` accepts happily), and 12 budget scenarios covering back-dating, forward-dating,
+trips with and without their own pot, month boundaries, monthly mode, and a parked past month.

@@ -231,16 +231,21 @@
       const dailyBase = b.amount / D;
       const spentBefore = exp.filter((t) => t.date < today).reduce((s, t) => s + t.amount, 0);
       const spentToday = exp.filter((t) => t.date === today).reduce((s, t) => s + t.amount, 0);
-      // Today's allowance = budget still unspent, spread over the days left (incl. today).
+      // Anything dated after today is already spoken for — it used to count in the
+      // month total but not in any daily figure, so a rent booked ahead silently
+      // inflated every remaining day's allowance.
+      const committedAhead = exp.filter((t) => t.date > today).reduce((s, t) => s + t.amount, 0);
+      // Today's allowance = budget still unspent and uncommitted, spread over the
+      // days left (incl. today).
       const daysLeftIncl = D - d + 1;
-      const todayBudget = (b.amount - spentBefore) / daysLeftIncl;
+      const todayBudget = (b.amount - spentBefore - committedAhead) / daysLeftIncl;
       // Tomorrow's preview: leftover after today, spread over the days after today.
       const daysLeftAfter = D - d;
       const tomorrowBudget = daysLeftAfter > 0
-        ? (b.amount - spentBefore - spentToday) / daysLeftAfter
+        ? (b.amount - spentBefore - spentToday - committedAhead) / daysLeftAfter
         : null;                                             // today is the last day
       Object.assign(out, {
-        dailyBase, d, spentBefore, spentToday, todayBudget,
+        dailyBase, d, spentBefore, spentToday, committedAhead, todayBudget,
         todayRemaining: todayBudget - spentToday, tomorrowBudget, daysLeftAfter
       });
     }
@@ -311,10 +316,14 @@
       .reduce((s, t) => s + t.amount, 0) : spent;
     const spentToday = active ? txs.filter((t) => t.date === today)
       .reduce((s, t) => s + t.amount, 0) : 0;
-    const todayAllowance = daysLeft > 0 ? (trip.budget - spentBefore) / daysLeft : 0;
+    // Dated ahead (a hotel paid on arrival day, say) — committed, not available
+    const committedAhead = active ? txs.filter((t) => t.date > today)
+      .reduce((s, t) => s + t.amount, 0) : 0;
+    const todayAllowance = daysLeft > 0
+      ? (trip.budget - spentBefore - committedAhead) / daysLeft : 0;
     return {
       trip, spent, budget: trip.budget, remaining: trip.budget - spent,
-      over: spent > trip.budget, days, daysLeft, active,
+      over: spent > trip.budget, days, daysLeft, active, committedAhead,
       spentToday, todayAllowance, todayRemaining: todayAllowance - spentToday
     };
   }
@@ -416,6 +425,23 @@
         ]));
       }
       card.append(meter(bs.spentToday, Math.max(bs.todayBudget, bs.spentToday, 0.01)));
+
+      // Why isn't today simply the base amount? Because earlier days over- or
+      // underspent, and because money dated ahead is already reserved. Adding an
+      // expense for a past day changes today by its share of the days left, which
+      // looks like "nothing happened" unless the redistribution is spelled out.
+      const shift = bs.todayBudget - bs.dailyBase;
+      if (Math.abs(shift) >= 0.005) {
+        const daysLeftIncl = bs.D - bs.d + 1;
+        const why = [];
+        if (bs.spentBefore > 0) why.push(fmtEUR(bs.spentBefore) + ' spent earlier');
+        if (bs.committedAhead > 0) why.push(fmtEUR(bs.committedAhead) + ' booked ahead');
+        card.append(el('div', { class: 'budget-why muted', text:
+          (shift > 0 ? '▲ ' + fmtEUR(shift) : '▼ ' + fmtEUR(-shift)) + ' vs the ' +
+          fmtEUR(bs.dailyBase) + ' base — ' +
+          (why.length ? why.join(' and ') : 'nothing spent yet') +
+          ', spread over the ' + daysLeftIncl + ' days left.' }));
+      }
 
       if (bs.tomorrowBudget != null) {
         const delta = bs.tomorrowBudget - bs.dailyBase;
@@ -597,34 +623,55 @@
     // daily decision), otherwise the month's net. Income/expenses sit quietly below.
     const net = income - expense;
     const bs = budgetStatus();
-    const heroDaily = bs && bs.mode === 'daily' && bs.isCurrent;
-    const heroVal = heroDaily ? bs.todayRemaining : net;
-    root.append(el('div', { class: 'hero' }, [
-      el('div', { class: 'hero-label', text: heroDaily
-        ? (heroVal >= 0 ? 'Left to spend today' : 'Over budget today') : 'Net this month' }),
-      // Today's allowance isn't wealth-revealing, so it stays visible in private
-      // mode; the month's net does not.
-      el('div', { class: 'hero-value ' + (heroDaily ? '' : 'sens ') +
-        (heroVal > 0 ? 'pos' : heroVal < 0 ? 'neg' : ''), text: fmtEUR(heroVal) }),
-      el('div', { class: 'hero-sub muted' }, [
-        el('span', { text: '↑ ' + fmtEUR(income) }),
-        el('span', { text: '↓ ' + fmtEUR(expense) }),
-        heroDaily ? el('span', { text: 'net ' + fmtEUR(net) }) : null
-      ])
-    ]));
-
-    // On a trip right now? Show its own pot before the monthly budget.
     const trip = activeTrip();
     const tbs = tripBudgetStatus(trip);
+    // While a budgeted trip is running, your spending comes out of *its* pot and
+    // never touches the monthly allowance. Featuring the monthly number then means
+    // the headline can't move no matter what you add — so the trip takes the hero.
+    const heroTrip = !!(tbs && tbs.active);
+    const heroDaily = !heroTrip && bs && bs.mode === 'daily' && bs.isCurrent;
+
+    if (heroTrip) {
+      const rem = tbs.todayRemaining;
+      root.append(el('div', { class: 'hero' }, [
+        el('div', { class: 'hero-label', text: (trip.emoji || '✈️') + ' ' +
+          (rem >= 0 ? 'Left for today on ' + trip.name : 'Over ' + trip.name + '’s daily pace') }),
+        el('div', { class: 'hero-value ' + (rem > 0 ? 'pos' : rem < 0 ? 'neg' : ''),
+          text: fmtTripMoney(trip, rem) }),
+        el('div', { class: 'hero-sub muted' }, [
+          tripHasFx(trip) ? el('span', { text: '≈ ' + fmtEUR(rem) }) : null,
+          el('span', { text: tbs.daysLeft + (tbs.daysLeft === 1 ? ' day left' : ' days left') })
+        ])
+      ]));
+    } else {
+      const heroVal = heroDaily ? bs.todayRemaining : net;
+      root.append(el('div', { class: 'hero' }, [
+        el('div', { class: 'hero-label', text: heroDaily
+          ? (heroVal >= 0 ? 'Left to spend today' : 'Over budget today') : 'Net this month' }),
+        // Today's allowance isn't wealth-revealing, so it stays visible in private
+        // mode; the month's net does not.
+        el('div', { class: 'hero-value ' + (heroDaily ? '' : 'sens ') +
+          (heroVal > 0 ? 'pos' : heroVal < 0 ? 'neg' : ''), text: fmtEUR(heroVal) }),
+        el('div', { class: 'hero-sub muted' }, [
+          el('span', { text: '↑ ' + fmtEUR(income) }),
+          el('span', { text: '↓ ' + fmtEUR(expense) }),
+          heroDaily ? el('span', { text: 'net ' + fmtEUR(net) }) : null
+        ])
+      ]));
+    }
+
+    // On a trip right now? Its pot comes before the monthly budget.
     if (tbs) {
       const rem = tbs.todayRemaining;
-      root.append(el('div', { class: 'card' }, [
+      const card = el('div', { class: 'card' }, [
         el('div', { class: 'card-head' }, [
           el('h2', { text: (trip.emoji || '✈️') + ' ' + trip.name }),
           el('button', { class: 'btn small ghost', text: 'Details',
             onclick: () => openTripDetail(trip) })
-        ]),
-        el('div', { class: 'budget-today' }, [
+        ])
+      ]);
+      if (!heroTrip) {
+        card.append(el('div', { class: 'budget-today' }, [
           el('div', { class: 'bt-label', text: rem >= 0 ? 'Left for today on this trip'
             : 'Over the trip’s daily pace' }),
           el('div', { class: 'bt-value ' + (rem >= 0 ? 'pos' : 'neg'),
@@ -632,13 +679,24 @@
           el('div', { class: 'muted', text:
             (tripHasFx(trip) ? '≈ ' + fmtEUR(rem) + ' · ' : '') + tbs.daysLeft +
             (tbs.daysLeft === 1 ? ' day left' : ' days left') })
-        ]),
-        meter(tbs.spent, tbs.budget),
+        ]));
+      } else {
+        card.append(el('div', { class: 'budget-line' }, [
+          el('span', { text: 'Today' }),
+          el('span', { text: fmtTripMoney(trip, tbs.spentToday) + ' / ' +
+            fmtTripMoney(trip, tbs.todayAllowance) })
+        ]));
+      }
+      card.append(meter(tbs.spent, tbs.budget),
         el('div', { class: 'muted', style: 'margin-top:6px', text:
           fmtTripMoney(trip, tbs.spent) + ' of ' + fmtTripMoney(trip, tbs.budget) +
           (tripHasFx(trip) ? ' (≈ ' + fmtEUR(tbs.spent) + ' of ' + fmtEUR(tbs.budget) + ')' : '') +
-          ' · not counted in your monthly budget' })
-      ]));
+          ' · not counted in your monthly budget' }));
+      if (tbs.committedAhead > 0) {
+        card.append(el('div', { class: 'muted', style: 'margin-top:4px', text:
+          fmtTripMoney(trip, tbs.committedAhead) + ' already booked on later days' }));
+      }
+      root.append(card);
     }
 
     if (bs) root.append(budgetCard(bs, heroDaily));
