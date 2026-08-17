@@ -98,12 +98,13 @@ const Charts = (() => {
    * Tap a bar to see its value in a tooltip.
    */
   function bars(container, data, opts) {
-    const { height = 190, color = css('--accent'), formatValue = String } = opts || {};
+    const { height = 190, color = css('--accent'), formatValue = String,
+            onBar = null, refLine = null, refLabel = '' } = opts || {};
     const width = Math.max(280, container.clientWidth || 320);
     const pad = { top: 12, right: 6, bottom: 22, left: 44 };
     const plotW = width - pad.left - pad.right;
     const plotH = height - pad.top - pad.bottom;
-    const max = niceMax(Math.max(...data.map((d) => d.value), 0));
+    const max = niceMax(Math.max(...data.map((d) => d.value), refLine || 0, 0));
 
     const NS = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(NS, 'svg');
@@ -168,9 +169,11 @@ const Charts = (() => {
       hit.setAttribute('width', band);
       hit.setAttribute('height', plotH);
       hit.setAttribute('fill', 'transparent');
+      if (onBar) hit.style.cursor = 'pointer';
       hit.addEventListener('click', (e) => {
         e.stopPropagation();
-        showTip(container, e, d.label + ' · ' + formatValue(d.value));
+        if (onBar) onBar(d, i);
+        else showTip(container, e, d.label + ' · ' + formatValue(d.value));
       });
       svg.appendChild(hit);
 
@@ -185,6 +188,26 @@ const Charts = (() => {
         svg.appendChild(label);
       }
     });
+
+    // Reference line (a daily allowance, say) drawn over the bars
+    if (refLine > 0 && refLine <= max) {
+      const y = pad.top + plotH - (refLine / max) * plotH;
+      const l = document.createElementNS(NS, 'line');
+      l.setAttribute('x1', pad.left); l.setAttribute('x2', width - pad.right);
+      l.setAttribute('y1', y); l.setAttribute('y2', y);
+      l.setAttribute('stroke', css('--ink-2') || axis);
+      l.setAttribute('stroke-width', '1');
+      l.setAttribute('stroke-dasharray', '4 3');
+      svg.appendChild(l);
+      if (refLabel) {
+        const t = document.createElementNS(NS, 'text');
+        t.setAttribute('x', width - pad.right); t.setAttribute('y', y - 4);
+        t.setAttribute('text-anchor', 'end'); t.setAttribute('font-size', '9');
+        t.setAttribute('fill', axis);
+        t.textContent = refLabel;
+        svg.appendChild(t);
+      }
+    }
 
     container.innerHTML = '';
     container.appendChild(svg);

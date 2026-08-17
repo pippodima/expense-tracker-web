@@ -808,3 +808,29 @@ left *means*. The budget card now spells it out:
 syntax, a **scope check** over 23 render/money functions (the Chapter 28 class of bug, which
 `node --check` accepts happily), and 12 budget scenarios covering back-dating, forward-dating,
 trips with and without their own pot, month boundaries, monthly mode, and a parked past month.
+
+### Chapter 34 — A trip gets its own stats page (2026-08-03)
+Request: opening a trip only listed the places you spent at — it wanted the same plots the
+month gets in Stats. A trip *is* a period, so it now gets the same treatment, drawn in the
+trip's own currency because that's what you were reading off price tags.
+
+Three cards inside the trip sheet:
+- **Day by day** — one bar per trip day, with the even-spend line drawn across when the trip
+  has a budget ("daily pace"). Tapping a bar opens that day's transactions, which meant giving
+  `Charts.bars` an `onBar` callback and an optional `refLine`/`refLabel`.
+- **Where it went** — donut plus the full tappable category list with percentages, each row
+  scoped to the trip's dates rather than the month.
+- **Pace** — cumulative spend against a straight even-spend line, ending with a verdict
+  ("1,75 TRY behind an even spend by day 8"). An unfinished trip stops the line at today
+  instead of flat-lining into the future. Hidden entirely when the trip has no budget.
+
+The Places list is no longer inert — rows open the merchant detail, and totals moved to the
+local currency like everything else.
+
+The charts use the **same expense set as the budget meter directly above them** (excluding
+confirmed subscriptions), so the numbers agree; when that set differs from the header total,
+a line at the bottom says exactly how much was left out and why.
+
+`tests/trip-charts.test.js` renders the real `tripCharts` against a fake DOM with every rAF
+forced: 20 checks over a finished foreign-currency trip, an active one (pace must stop at
+today), a trip with no budget, an empty trip, and a one-day trip whose axis is degenerate.

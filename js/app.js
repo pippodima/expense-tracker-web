@@ -2558,16 +2558,171 @@
           'Amounts converted at 1 ' + trip.currency + ' = ' + fmtEUR(trip.rate) +
           ' · ' + U.fmtCur(t.spent / trip.rate, trip.currency) + ' spent locally' }));
       }
+
+      tripCharts(body, trip);
+
+      body.append(el('div', { class: 'sub-title', style: 'margin-top:16px', text: 'Places' }));
+      const rg = { from: trip.from, to: trip.to, label: trip.name };
       groups.forEach((g) => {
-        body.append(el('div', { class: 'place-row', style: 'pointer-events:none' }, [
+        body.append(el('button', { class: 'place-row',
+          onclick: () => openMerchantDetail(g, rg) }, [
           el('div', { class: 'place-main' }, [
             el('div', { class: 'place-name', text: g.label }),
             el('div', { class: 'place-count', text: g.count + (g.count === 1 ? ' charge' : ' charges') })
           ]),
-          el('div', { class: 'place-total', text: fmtEUR(g.total) })
+          el('div', { class: 'place-total', text: fmtTripMoney(trip, g.total) }),
+          el('span', { class: 'catbar-chev', text: '›' })
         ]));
       });
     }, { tall: true });
+  }
+
+  /* A trip is its own little period, so it deserves the same treatment the month
+     gets in Stats: where the money went, which days were heavy, and — when there
+     is a budget — whether the pace is going to hold. Everything is drawn in the
+     trip's own currency, since that's what you were reading off price tags. */
+  function tripCharts(body, trip) {
+    // Same expense set as the budget meter above, so the numbers agree
+    const exp = DB.state.transactions.filter(
+      (t) => t.type === 'expense' && t.date >= trip.from && t.date <= trip.to &&
+        !isProtectedRecurring(t));
+    if (!exp.length) {
+      body.append(el('div', { class: 'empty', html:
+        '<span class="big">🧳</span>No spending recorded on this trip yet' }));
+      return;
+    }
+    const skipped = DB.state.transactions.filter(
+      (t) => t.type === 'expense' && t.date >= trip.from && t.date <= trip.to &&
+        isProtectedRecurring(t)).reduce((s, t) => s + t.amount, 0);
+
+    const fx = tripHasFx(trip);
+    const loc = (eur) => (fx ? eur / trip.rate : eur);
+    const fmtL = (v) => (fx ? U.fmtCur(v, trip.currency) : fmtEUR(v));
+    const total = exp.reduce((s, t) => s + t.amount, 0);
+
+    // ---- Day by day ----
+    const days = [];
+    for (let d = new Date(trip.from + 'T12:00:00'); isoOf(d) <= trip.to; d.setDate(d.getDate() + 1)) {
+      days.push(isoOf(d));
+    }
+    const byDay = new Map();
+    exp.forEach((t) => byDay.set(t.date, (byDay.get(t.date) || 0) + t.amount));
+    const dayData = days.map((iso, i) => ({
+      iso, label: U.fmtDate(iso, { weekday: 'short', day: 'numeric', month: 'short' }),
+      tickLabel: String(i + 1), value: Math.round(loc(byDay.get(iso) || 0) * 100) / 100
+    }));
+    const perDay = loc(total) / days.length;
+    const dayCard = el('div', { class: 'card' }, [
+      el('div', { class: 'card-head' }, [
+        el('h2', { text: 'Day by day' }),
+        el('span', { class: 'muted', text: fmtL(perDay) + ' avg' })
+      ])
+    ]);
+    const dayWrap = el('div', { class: 'chart-wrap' });
+    dayCard.append(dayWrap, el('div', { class: 'trend-cap muted',
+      text: 'Day 1 to ' + days.length + ' · tap a day to see what you bought.' }));
+    body.append(dayCard);
+    requestAnimationFrame(() => Charts.bars(dayWrap, dayData, {
+      color: U.colorOf('blue'), formatValue: fmtL,
+      refLine: trip.budget > 0 ? loc(trip.budget / days.length) : null,
+      refLabel: trip.budget > 0 ? 'daily pace' : '',
+      onBar: (d) => openDayDetail(d.iso)
+    }));
+
+    // ---- Where it went ----
+    const byCat = new Map();
+    exp.forEach((t) => byCat.set(t.categoryId, (byCat.get(t.categoryId) || 0) + t.amount));
+    const ranked = [...byCat.entries()].sort((a, b) => b[1] - a[1]);
+    let items = ranked.map(([id, value]) => {
+      const c = DB.category(id);
+      return { id, value, label: c ? c.name : 'Uncategorized',
+        color: U.colorOf(c ? c.color : 'blue') };
+    });
+    if (items.length > 7) {
+      const rest = items.slice(6);
+      items = items.slice(0, 6);
+      items.push({ id: '__other', value: rest.reduce((s, d) => s + d.value, 0),
+        label: 'Other', color: '#898781' });
+    }
+    const catCard = el('div', { class: 'card' }, [
+      el('div', { class: 'card-head' }, [
+        el('h2', { text: 'Where it went' }),
+        el('span', { class: 'muted', text: byCat.size + (byCat.size === 1 ? ' category' : ' categories') })
+      ])
+    ]);
+    const donutWrap = el('div', { class: 'chart-wrap' });
+    catCard.append(donutWrap);
+    const maxV = ranked.length ? ranked[0][1] : 0;
+    ranked.forEach(([id, value]) => {
+      const c = DB.category(id);
+      const share = total > 0 ? Math.round((value / total) * 100) : 0;
+      catCard.append(el('button', { class: 'catbar',
+        onclick: () => openCategoryDetail(c, { from: trip.from, to: trip.to }, trip.name) }, [
+        el('span', { class: 'catbar-icon', text: c ? c.icon : '?',
+          style: 'background:' + U.tintOf(c ? c.color : 'blue') }),
+        el('div', { class: 'catbar-main' }, [
+          el('div', { class: 'catbar-top' }, [
+            el('span', { class: 'catbar-name', text: c ? c.name : 'Uncategorized' }),
+            el('span', { class: 'catbar-val', text: fmtL(loc(value)) })
+          ]),
+          el('div', { class: 'catbar-track' }, [
+            el('div', { class: 'catbar-fill', style: 'width:' +
+              (maxV > 0 ? (value / maxV) * 100 : 0) + '%;background:' +
+              U.colorOf(c ? c.color : 'blue') })
+          ])
+        ]),
+        el('span', { class: 'catbar-pct', text: share + '%' }),
+        el('span', { class: 'catbar-chev', text: '›' })
+      ]));
+    });
+    body.append(catCard);
+    requestAnimationFrame(() => Charts.donut(donutWrap,
+      items.map((d) => ({ id: d.id, label: d.label, value: d.value, color: d.color })),
+      { centerLabel: 'Spent', centerValue: fmtL(loc(total)) }));
+
+    // ---- Pace against the budget ----
+    if (trip.budget > 0) {
+      const today = U.todayISO();
+      const pts = []; let acc = 0;
+      for (let i = 0; i < days.length; i++) {
+        if (days[i] > today) break;              // an unfinished trip stops at today
+        acc += byDay.get(days[i]) || 0;
+        pts.push({ tick: String(i + 1), label: 'Day ' + (i + 1),
+          value: Math.round(loc(acc) * 100) / 100 });
+      }
+      if (pts.length) {
+        const straight = days.map((iso, i) => ({ tick: String(i + 1), label: 'Day ' + (i + 1),
+          value: Math.round(loc(trip.budget / days.length) * (i + 1) * 100) / 100 }));
+        const paceCard = el('div', { class: 'card' }, [
+          el('div', { class: 'card-head' }, [
+            el('h2', { text: 'Pace' }),
+            el('span', { class: 'muted', text: 'day ' + pts.length + ' of ' + days.length })
+          ]),
+          el('div', { class: 'legend-inline' }, [
+            legendKey(U.colorOf('blue'), 'Spent'),
+            legendKey(U.colorOf('red'), 'On budget')
+          ])
+        ]);
+        const paceWrap = el('div', { class: 'chart-wrap' });
+        const gap = pts[pts.length - 1].value - straight[pts.length - 1].value;
+        paceCard.append(paceWrap, el('div', { class: 'trend-cap' }, [
+          el('span', { class: gap > 0 ? 'neg' : 'pos',
+            text: fmtL(Math.abs(gap)) + (gap > 0 ? ' ahead of ' : ' behind ') }),
+          el('span', { class: 'muted', text: 'an even spend by day ' + pts.length + '.' })
+        ]));
+        body.append(paceCard);
+        requestAnimationFrame(() => Charts.multiLine(paceWrap, [
+          { label: 'Spent', color: U.colorOf('blue'), points: pts },
+          { label: 'On budget', color: U.colorOf('red'), dash: true, points: straight }
+        ], { formatValue: fmtL }));
+      }
+    }
+
+    if (skipped > 0) {
+      body.append(el('p', { class: 'muted', style: 'margin-top:10px;line-height:1.5', text:
+        'These charts leave out ' + fmtEUR(skipped) + ' of confirmed subscriptions charged ' +
+        'during the trip — they count as normal monthly spending, not travel.' }));
+    }
   }
 
   /* ---------------- Period comparison ---------------- */
