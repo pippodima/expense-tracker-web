@@ -834,3 +834,42 @@ a line at the bottom says exactly how much was left out and why.
 `tests/trip-charts.test.js` renders the real `tripCharts` against a fake DOM with every rAF
 forced: 20 checks over a finished foreign-currency trip, an active one (pace must stop at
 today), a trip with no budget, an empty trip, and a one-day trip whose axis is degenerate.
+
+### Chapter 35 — Move the blocks where you want them (2026-08-03)
+Request: let the cards be reordered — in Trends, and generally. Rather than bolt drag-and-drop
+onto three render functions, every stacked card became a **block** with a stable key, and each
+view declares its catalogue in one place:
+
+```
+BLOCKS = {
+  dashboard:        trip · budget · top
+  'stats-overview': tiles · compare · inout · net · categories
+  'stats-trends':   mix · movers · pace · fixed · savings · weekday
+}
+```
+
+`renderBlocks(root, viewKey, builders)` walks the user's order and calls each builder, which
+returns a node **or null** when the block doesn't apply right now (no active trip, no budget,
+no income to compute a savings rate from). A null keeps its place in the order instead of
+losing it, and a hidden block is never built at all — so hiding a chart you never look at also
+skips its work.
+
+Order and visibility live in `meta.blocks`, so they survive a reinstall and ride along inside
+backups. Two details that matter over time: a key that no longer exists is dropped, and a
+block added by a later app update is slotted in at its **default position** rather than dumped
+at the bottom, so a new card shows up where it belongs.
+
+The ⇅ button in the Home and Stats headers opens an **Arrange** sheet. In Stats it acts on
+whichever sub-view you're on. Each row has a drag handle, up/down arrows, and an eye to hide.
+The arrows exist because they always work; the drag is the nice path.
+
+The drag deliberately rebuilds nothing mid-gesture — the other rows slide out of the way with
+transforms and the array is spliced only on release — so the pointer never loses its target,
+which is what makes it survive a finger on a small screen. `touch-action: none` on the handle
+alone means the page still scrolls normally everywhere else.
+
+`tests/blocks.test.js`: 22 checks over the order maths (saved order, dropped keys, duplicates,
+newly-added blocks), the render pass (hidden never built, null skipped), the sheet's arrows and
+eye writing to meta, and the drag itself — dragging down two slots, to the top, a one-slot
+nudge, a wobble that must change nothing, a yank past the end that clamps, and a single row
+that must not crash.

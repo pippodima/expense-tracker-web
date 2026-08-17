@@ -43,7 +43,7 @@ const GUARDED = ['renderDashboard', 'budgetCard', 'budgetStatus', 'tripBudgetSta
   'renderStats', 'statsOverview', 'statsTrends', 'trendMonths', 'statsEmptyNote',
   'statsCalendar', 'statsMerchants', 'statsTrips', 'openTxSheet', 'openTripDetail',
   'openCategoryDetail', 'renderTransactions', 'renderAccounts', 'renderSettings',
-  'tripCharts', 'refreshToday', 'exportJSON', 'exportEncrypted', 'importJSON', 'repairData'];
+  'tripCharts', 'renderBlocks', 'openArrangeSheet', 'makeSortable', 'blockSequence', 'refreshToday', 'exportJSON', 'exportEncrypted', 'importJSON', 'repairData'];
 if (!run([path.join(__dirname, 'scope-check.js'), ...GUARDED], 'scope')) failed++;
 
 for (const f of fs.readdirSync(__dirname).filter((n) => n.endsWith('.test.js')).sort()) {

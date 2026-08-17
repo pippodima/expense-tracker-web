@@ -205,6 +205,194 @@
 
   function inRange(t, r) { return t.date >= r.from && t.date <= r.to; }
 
+  /* ======================= Rearrangeable blocks =======================
+     Every stacked card in a view is a "block" with a stable key. The order and
+     which ones are hidden live in meta, so they survive a reinstall and ride
+     along inside backups. A block that doesn't apply right now (no trip, no
+     budget) simply builds to null and is skipped without losing its place. */
+
+  /* The catalogue lives here rather than inside each render function, so the
+     arrange sheet can be opened from a header button before the blocks that it
+     lists have been built. */
+  const BLOCKS = {
+    dashboard: [
+      { key: 'trip', title: 'Active trip' },
+      { key: 'budget', title: 'Budget' },
+      { key: 'top', title: 'Top spending' }
+    ],
+    'stats-overview': [
+      { key: 'tiles', title: 'Income / expenses / net' },
+      { key: 'compare', title: 'Comparison with last period' },
+      { key: 'inout', title: 'Income vs expenses' },
+      { key: 'net', title: 'Net over time' },
+      { key: 'categories', title: 'Spending by category' }
+    ],
+    'stats-trends': [
+      { key: 'mix', title: 'Categories over time' },
+      { key: 'movers', title: 'What changed' },
+      { key: 'pace', title: 'Pace this month' },
+      { key: 'fixed', title: 'Fixed vs one-off' },
+      { key: 'savings', title: 'Savings rate' },
+      { key: 'weekday', title: 'Weekday rhythm' }
+    ]
+  };
+
+  const blockPrefs = (viewKey) =>
+    Object.assign({ order: [], hidden: {} }, (DB.state.meta.blocks || {})[viewKey] || {});
+
+  async function setBlockPrefs(viewKey, patch) {
+    const all = Object.assign({}, DB.state.meta.blocks || {});
+    all[viewKey] = Object.assign(blockPrefs(viewKey), patch);
+    await DB.setMeta('blocks', all);
+  }
+
+  /** Saved order, with keys that no longer exist dropped and brand-new blocks
+      slotted in at their default position rather than dumped at the bottom. */
+  function blockSequence(viewKey) {
+    const defs = BLOCKS[viewKey] || [];
+    const { order, hidden } = blockPrefs(viewKey);
+    const known = new Set(defs.map((d) => d.key));
+    const seq = order.filter((k, i) => known.has(k) && order.indexOf(k) === i);
+    defs.forEach((d, i) => {
+      if (!seq.includes(d.key)) seq.splice(Math.min(i, seq.length), 0, d.key);
+    });
+    return { seq, hidden };
+  }
+
+  /** builders: { blockKey: () => node|null }. A builder returning null means the
+      block doesn't apply right now; its place in the order is remembered anyway. */
+  function renderBlocks(root, viewKey, builders) {
+    const { seq, hidden } = blockSequence(viewKey);
+    seq.forEach((k) => {
+      if (hidden[k]) return;
+      const fn = builders[k];
+      const node = fn && fn();
+      if (node) root.append(node);
+    });
+  }
+
+  function arrangeButton(viewKey) {
+    return el('button', {
+      class: 'icon-btn', 'aria-label': 'Arrange blocks',
+      onclick: () => openArrangeSheet(viewKey),
+      html: '<svg viewBox="0 0 24 24"><path d="M10 7h10M10 12h10M10 17h10"/>' +
+        '<path d="M4 9l2-2.5L8 9M4 15l2 2.5L8 15"/></svg>'
+    });
+  }
+
+  function openArrangeSheet(viewKey) {
+    const defs = BLOCKS[viewKey] || [];
+    openSheet('Arrange', (body) => {
+      const { seq, hidden } = blockSequence(viewKey);
+      const order = seq.slice();
+      const hid = Object.assign({}, hidden);
+      const byKey = new Map(defs.map((d) => [d.key, d]));
+      const list = el('div', { class: 'arrange-list' });
+      body.append(
+        el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:14px', text:
+          'Drag by the handle, or use the arrows. Hiding a block only removes it from ' +
+          'this screen — nothing is deleted, and you can bring it back here any time.' }),
+        list
+      );
+
+      const save = async () => {
+        await setBlockPrefs(viewKey, { order: order.slice(), hidden: Object.assign({}, hid) });
+        render();
+      };
+
+      const draw = () => {
+        list.innerHTML = '';
+        order.forEach((k, i) => {
+          const def = byKey.get(k);
+          if (!def) return;
+          const off = !!hid[k];
+          const move = async (delta) => {
+            const j = i + delta;
+            if (j < 0 || j >= order.length) return;
+            order.splice(j, 0, order.splice(i, 1)[0]);
+            draw(); await save();
+          };
+          list.append(el('div', { class: 'ar-row' + (off ? ' off' : ''), 'data-key': k }, [
+            el('span', { class: 'ar-handle', 'aria-hidden': 'true', text: '⋮⋮' }),
+            el('span', { class: 'ar-name', text: def.title }),
+            el('button', { class: 'ar-btn', 'aria-label': 'Move up', text: '↑',
+              onclick: () => move(-1) }),
+            el('button', { class: 'ar-btn', 'aria-label': 'Move down', text: '↓',
+              onclick: () => move(1) }),
+            el('button', {
+              class: 'ar-eye' + (off ? '' : ' on'), 'aria-label': off ? 'Show' : 'Hide',
+              text: off ? '◌' : '◉',
+              onclick: async () => { if (off) delete hid[k]; else hid[k] = true; draw(); await save(); }
+            })
+          ]));
+        });
+        makeSortable(list, order, async () => { draw(); await save(); });
+      };
+      draw();
+
+      body.append(
+        el('div', { class: 'spacer' }),
+        el('button', { class: 'btn block ghost', text: 'Reset to default order',
+          onclick: async () => {
+            order.length = 0;
+            defs.forEach((d) => order.push(d.key));
+            Object.keys(hid).forEach((k) => delete hid[k]);
+            draw(); await save();
+          } })
+      );
+    });
+  }
+
+  /** Drag-to-reorder for equal-height rows. Nothing is rebuilt mid-drag — the
+      other rows just slide out of the way — so the pointer never loses its
+      target, which is what makes this survive a finger on a small screen. */
+  function makeSortable(list, order, onDone) {
+    const rows = Array.from(list.children);
+    if (rows.length < 2) return;
+    rows.forEach((row, from) => {
+      const handle = row.querySelector('.ar-handle');
+      if (!handle) return;
+      handle.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        const first = rows[0].getBoundingClientRect();
+        const second = rows[1].getBoundingClientRect();
+        const step = Math.max(1, second.top - first.top);
+        const startY = e.clientY;
+        let to = from;
+        row.classList.add('ar-dragging');
+        try { handle.setPointerCapture(e.pointerId); } catch { /* not fatal */ }
+
+        const move = (ev) => {
+          const dy = ev.clientY - startY;
+          row.style.transform = 'translateY(' + dy + 'px)';
+          const idx = Math.max(0, Math.min(rows.length - 1, from + Math.round(dy / step)));
+          if (idx === to) return;
+          to = idx;
+          rows.forEach((r, i) => {
+            if (i === from) return;
+            const shift = (from < to && i > from && i <= to) ? -step
+              : (from > to && i >= to && i < from) ? step : 0;
+            r.style.transform = shift ? 'translateY(' + shift + 'px)' : '';
+          });
+        };
+        const up = () => {
+          handle.removeEventListener('pointermove', move);
+          handle.removeEventListener('pointerup', up);
+          handle.removeEventListener('pointercancel', up);
+          rows.forEach((r) => { r.style.transform = ''; });
+          row.classList.remove('ar-dragging');
+          if (to !== from) {
+            order.splice(to, 0, order.splice(from, 1)[0]);
+            onDone();
+          }
+        };
+        handle.addEventListener('pointermove', move);
+        handle.addEventListener('pointerup', up);
+        handle.addEventListener('pointercancel', up);
+      });
+    });
+  }
+
   /* ======================= Budget ======================= */
 
   /* Daily budget that redistributes: whatever budget is left is spread evenly over
@@ -560,6 +748,7 @@
       el('h1', { text: 'Home' }),
       el('div', { class: 'title-right' }, [
         el('span', { class: 'muted total-chip', text: fmtEUR(DB.totalBalance()) + ' total' }),
+        arrangeButton('dashboard'),
         el('button', { class: 'icon-btn', 'aria-label': 'Search', onclick: openGlobalSearch,
           html: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/>' +
             '<path d="M16 16l4.5 4.5"/></svg>' }),
@@ -661,7 +850,8 @@
     }
 
     // On a trip right now? Its pot comes before the monthly budget.
-    if (tbs) {
+    const tripBlock = () => {
+      if (!tbs) return null;
       const rem = tbs.todayRemaining;
       const card = el('div', { class: 'card' }, [
         el('div', { class: 'card-head' }, [
@@ -696,51 +886,57 @@
         card.append(el('div', { class: 'muted', style: 'margin-top:4px', text:
           fmtTripMoney(trip, tbs.committedAhead) + ' already booked on later days' }));
       }
-      root.append(card);
-    }
+      return card;
+    };
 
-    if (bs) root.append(budgetCard(bs, heroDaily));
+    const budgetBlock = () => (bs ? budgetCard(bs, heroDaily) : null);
 
     // Top spending categories (compact) — full charts live in the Stats tab
-    const byCat = new Map();
-    txs.filter((t) => t.type === 'expense').forEach((t) => {
-      byCat.set(t.categoryId, (byCat.get(t.categoryId) || 0) + t.amount);
-    });
-    const items = [...byCat.entries()]
-      .map(([id, value]) => ({ cat: DB.category(id), value }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 5);
-
-    const catCard = el('div', { class: 'card' }, [
-      el('div', { class: 'card-head' }, [
-        el('h2', { text: 'Top spending' }),
-        el('button', { class: 'btn small ghost', text: 'All stats ›', onclick: () => show('stats') })
-      ])
-    ]);
-    if (items.length === 0) {
-      catCard.append(el('div', { class: 'empty', html: '<span class="big">🍩</span>No expenses this period' }));
-    } else {
-      const maxV = items[0].value;
-      items.forEach(({ cat, value }) => {
-        const color = U.colorOf(cat ? cat.color : 'blue');
-        catCard.append(el('button', { class: 'catbar', onclick: () => openCategoryDetail(cat) }, [
-          el('span', { class: 'catbar-icon', text: cat ? cat.icon : '❓',
-            style: 'background:' + U.tintOf(cat ? cat.color : 'blue') }),
-          el('div', { class: 'catbar-main' }, [
-            el('div', { class: 'catbar-top' }, [
-              el('span', { class: 'catbar-name', text: cat ? cat.name : 'Uncategorized' }),
-              el('span', { class: 'catbar-val', text: fmtEUR(value) })
-            ]),
-            el('div', { class: 'catbar-track' }, [
-              el('div', { class: 'catbar-fill',
-                style: 'width:' + (maxV > 0 ? (value / maxV) * 100 : 0) + '%;background:' + color })
-            ])
-          ]),
-          el('span', { class: 'catbar-chev', text: '›' })
-        ]));
+    const topBlock = () => {
+      const byCat = new Map();
+      txs.filter((t) => t.type === 'expense').forEach((t) => {
+        byCat.set(t.categoryId, (byCat.get(t.categoryId) || 0) + t.amount);
       });
-    }
-    root.append(catCard);
+      const items = [...byCat.entries()]
+        .map(([id, value]) => ({ cat: DB.category(id), value }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 5);
+
+      const catCard = el('div', { class: 'card' }, [
+        el('div', { class: 'card-head' }, [
+          el('h2', { text: 'Top spending' }),
+          el('button', { class: 'btn small ghost', text: 'All stats ›', onclick: () => show('stats') })
+        ])
+      ]);
+      if (items.length === 0) {
+        catCard.append(el('div', { class: 'empty', html: '<span class="big">🍩</span>No expenses this period' }));
+      } else {
+        const maxV = items[0].value;
+        items.forEach(({ cat, value }) => {
+          const color = U.colorOf(cat ? cat.color : 'blue');
+          catCard.append(el('button', { class: 'catbar', onclick: () => openCategoryDetail(cat) }, [
+            el('span', { class: 'catbar-icon', text: cat ? cat.icon : '❓',
+              style: 'background:' + U.tintOf(cat ? cat.color : 'blue') }),
+            el('div', { class: 'catbar-main' }, [
+              el('div', { class: 'catbar-top' }, [
+                el('span', { class: 'catbar-name', text: cat ? cat.name : 'Uncategorized' }),
+                el('span', { class: 'catbar-val', text: fmtEUR(value) })
+              ]),
+              el('div', { class: 'catbar-track' }, [
+                el('div', { class: 'catbar-fill',
+                  style: 'width:' + (maxV > 0 ? (value / maxV) * 100 : 0) + '%;background:' + color })
+              ])
+            ]),
+            el('span', { class: 'catbar-chev', text: '›' })
+          ]));
+        });
+      }
+      return catCard;
+    };
+
+    renderBlocks(root, 'dashboard', {
+      trip: tripBlock, budget: budgetBlock, top: topBlock
+    });
   }
 
   /* ---- Global search: everything, from anywhere ---- */
@@ -1241,7 +1437,13 @@
     const expense = txs.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
     const days = (new Date(rg.to) - new Date(rg.from)) / 86400000 + 1;
 
-    root.append(el('div', { class: 'view-title' }, [el('h1', { text: 'Stats' })]));
+    // The arrange button acts on whichever sub-view you're looking at
+    const arrangeable = ui.stats.view === 'overview' ? 'stats-overview'
+      : ui.stats.view === 'trends' ? 'stats-trends' : null;
+    root.append(el('div', { class: 'view-title' }, [
+      el('h1', { text: 'Stats' }),
+      arrangeable ? el('div', { class: 'title-right' }, [arrangeButton(arrangeable)]) : null
+    ]));
 
     // One control row: ‹ period pill › — the pill opens the range picker
     const nav = el('div', { class: 'month-nav' });
@@ -1280,9 +1482,8 @@
   }
 
   function statsOverview(root, rg, txs, income, expense, days) {
-    // Summary tiles
     const net = income - expense;
-    root.append(el('div', { class: 'tiles' }, [
+    const tilesBlock = () => el('div', { class: 'tiles' }, [
       el('div', { class: 'tile' }, [
         el('div', { class: 't-label', text: 'Income' }),
         el('div', { class: 't-value pos', text: fmtEUR(income) })
@@ -1299,122 +1500,134 @@
         el('div', { class: 't-label', text: 'Avg spend / day' }),
         el('div', { class: 't-value', text: fmtEUR(days > 0 ? expense / days : 0) })
       ])
-    ]));
+    ]);
 
+    // Nothing to arrange when there's nothing to show — the tiles still lead,
+    // because "all zeros" is itself the answer, and then the explanation.
     if (income === 0 && expense === 0) {
-      root.append(statsEmptyNote(rg));
+      root.append(tilesBlock(), statsEmptyNote(rg));
       return;
     }
-
-    const cmp = comparisonCard(rg);
-    if (cmp) root.append(cmp);
 
     const buckets = bucketize(txs, rg.from, rg.to, rg.gran);
 
     // Income vs Expenses (grouped bars)
-    const gbCard = el('div', { class: 'card' }, [
-      el('h2', { text: 'Income vs expenses' }),
-      el('div', { class: 'legend-inline' }, [
-        legendKey(U.colorOf('aqua'), 'Income'),
-        legendKey(U.colorOf('red'), 'Expenses')
-      ])
-    ]);
-    const gbWrap = el('div', { class: 'chart-wrap' });
-    gbCard.append(gbWrap);
-    root.append(gbCard);
-    requestAnimationFrame(() => Charts.groupedBars(gbWrap, buckets, [
-      { key: 'income', color: U.colorOf('aqua'), label: 'In' },
-      { key: 'expense', color: U.colorOf('red'), label: 'Out' }
-    ], { formatValue: fmtEUR }));
+    const inoutBlock = () => {
+      const gbCard = el('div', { class: 'card' }, [
+        el('h2', { text: 'Income vs expenses' }),
+        el('div', { class: 'legend-inline' }, [
+          legendKey(U.colorOf('aqua'), 'Income'),
+          legendKey(U.colorOf('red'), 'Expenses')
+        ])
+      ]);
+      const gbWrap = el('div', { class: 'chart-wrap' });
+      gbCard.append(gbWrap);
+      requestAnimationFrame(() => Charts.groupedBars(gbWrap, buckets, [
+        { key: 'income', color: U.colorOf('aqua'), label: 'In' },
+        { key: 'expense', color: U.colorOf('red'), label: 'Out' }
+      ], { formatValue: fmtEUR }));
+      return gbCard;
+    };
 
     // Net over time (line)
-    const netCard = el('div', { class: 'card' }, [el('h2', { text: 'Net over time' })]);
-    const netWrap = el('div', { class: 'chart-wrap' });
-    netCard.append(netWrap);
-    root.append(netCard);
-    requestAnimationFrame(() => Charts.line(netWrap,
-      buckets.map((b) => ({ tick: b.tick, label: b.label, value: Math.round(b.net * 100) / 100 })),
-      { color: U.colorOf('blue'), formatValue: fmtEUR }));
+    const netBlock = () => {
+      const netCard = el('div', { class: 'card' }, [el('h2', { text: 'Net over time' })]);
+      const netWrap = el('div', { class: 'chart-wrap' });
+      netCard.append(netWrap);
+      requestAnimationFrame(() => Charts.line(netWrap,
+        buckets.map((b) => ({ tick: b.tick, label: b.label, value: Math.round(b.net * 100) / 100 })),
+        { color: U.colorOf('blue'), formatValue: fmtEUR }));
+      return netCard;
+    };
 
     // Spending by category (donut)
-    const byCat = new Map();
-    txs.filter((t) => t.type === 'expense').forEach((t) => {
-      byCat.set(t.categoryId, (byCat.get(t.categoryId) || 0) + t.amount);
-    });
-    let items = [...byCat.entries()]
-      .map(([id, value]) => {
-        const c = DB.category(id);
-        return { id, value, label: c ? c.name : 'Uncategorized', icon: c ? c.icon : '❓',
-                 color: U.colorOf(c ? c.color : 'blue') };
-      })
-      .sort((a, b) => b.value - a.value);
-    if (items.length > 8) {
-      const rest = items.slice(7);
-      items = items.slice(0, 7);
-      items.push({ id: '__other', value: rest.reduce((s, d) => s + d.value, 0),
-        label: 'Other', icon: '•', color: '#898781' });
-    }
-
-    // One card: donut + the full category list, which doubles as the legend
-    // (the old separate legend + "All categories" card said the same thing twice)
-    const donutCard = el('div', { class: 'card' }, [
-      el('div', { class: 'card-head' }, [
-        el('h2', { text: 'Spending by category' }),
-        el('span', { class: 'muted', text: byCat.size + ' categories' })
-      ])
-    ]);
-    if (!items.length) {
-      donutCard.append(el('div', { class: 'empty', html:
-        '<span class="big">○</span>No expenses in this period' }));
-      root.append(donutCard);
-      return;
-    }
-    if (ui.stats.donutSel && !items.some((d) => d.id === ui.stats.donutSel)) ui.stats.donutSel = null;
-    const wrap = el('div', { class: 'chart-wrap' });
-    const list = el('div');
-    const allCats = [...byCat.entries()]
-      .map(([id, value]) => ({ cat: DB.category(id), id, value }))
-      .sort((a, b) => b.value - a.value);
-    const maxV = allCats[0].value;
-
-    const draw = () => {
-      const sel = items.find((d) => d.id === ui.stats.donutSel);
-      Charts.donut(wrap, items, {
-        selectedId: ui.stats.donutSel,
-        onSelect: (id) => { ui.stats.donutSel = id; draw(); },
-        centerLabel: sel ? sel.label : 'Expenses',
-        centerValue: fmtEUR(sel ? sel.value : expense)
+    const categoriesBlock = () => {
+      const byCat = new Map();
+      txs.filter((t) => t.type === 'expense').forEach((t) => {
+        byCat.set(t.categoryId, (byCat.get(t.categoryId) || 0) + t.amount);
       });
-      list.innerHTML = '';
-      allCats.forEach(({ cat, id, value }) => {
-        const color = U.colorOf(cat ? cat.color : 'blue');
-        const share = expense > 0 ? Math.round((value / expense) * 100) : 0;
-        const dim = ui.stats.donutSel && ui.stats.donutSel !== id &&
-          items.some((d) => d.id === id);
-        list.append(el('button', {
-          class: 'catbar' + (dim ? ' dim' : ''),
-          onclick: () => openCategoryDetail(cat, { from: rg.from, to: rg.to }, rg.label)
-        }, [
-          el('span', { class: 'catbar-icon', text: cat ? cat.icon : '?',
-            style: 'background:' + U.tintOf(cat ? cat.color : 'blue') }),
-          el('div', { class: 'catbar-main' }, [
-            el('div', { class: 'catbar-top' }, [
-              el('span', { class: 'catbar-name', text: cat ? cat.name : 'Uncategorized' }),
-              el('span', { class: 'catbar-val', text: fmtEUR(value) })
+      let items = [...byCat.entries()]
+        .map(([id, value]) => {
+          const c = DB.category(id);
+          return { id, value, label: c ? c.name : 'Uncategorized', icon: c ? c.icon : '❓',
+                   color: U.colorOf(c ? c.color : 'blue') };
+        })
+        .sort((a, b) => b.value - a.value);
+      if (items.length > 8) {
+        const rest = items.slice(7);
+        items = items.slice(0, 7);
+        items.push({ id: '__other', value: rest.reduce((s, d) => s + d.value, 0),
+          label: 'Other', icon: '•', color: '#898781' });
+      }
+
+      // One card: donut + the full category list, which doubles as the legend
+      // (the old separate legend + "All categories" card said the same thing twice)
+      const donutCard = el('div', { class: 'card' }, [
+        el('div', { class: 'card-head' }, [
+          el('h2', { text: 'Spending by category' }),
+          el('span', { class: 'muted', text: byCat.size + ' categories' })
+        ])
+      ]);
+      if (!items.length) {
+        donutCard.append(el('div', { class: 'empty', html:
+          '<span class="big">○</span>No expenses in this period' }));
+        return donutCard;
+      }
+      if (ui.stats.donutSel && !items.some((d) => d.id === ui.stats.donutSel)) ui.stats.donutSel = null;
+      const wrap = el('div', { class: 'chart-wrap' });
+      const list = el('div');
+      const allCats = [...byCat.entries()]
+        .map(([id, value]) => ({ cat: DB.category(id), id, value }))
+        .sort((a, b) => b.value - a.value);
+      const maxV = allCats[0].value;
+
+      const draw = () => {
+        const sel = items.find((d) => d.id === ui.stats.donutSel);
+        Charts.donut(wrap, items, {
+          selectedId: ui.stats.donutSel,
+          onSelect: (id) => { ui.stats.donutSel = id; draw(); },
+          centerLabel: sel ? sel.label : 'Expenses',
+          centerValue: fmtEUR(sel ? sel.value : expense)
+        });
+        list.innerHTML = '';
+        allCats.forEach(({ cat, id, value }) => {
+          const color = U.colorOf(cat ? cat.color : 'blue');
+          const share = expense > 0 ? Math.round((value / expense) * 100) : 0;
+          const dim = ui.stats.donutSel && ui.stats.donutSel !== id &&
+            items.some((d) => d.id === id);
+          list.append(el('button', {
+            class: 'catbar' + (dim ? ' dim' : ''),
+            onclick: () => openCategoryDetail(cat, { from: rg.from, to: rg.to }, rg.label)
+          }, [
+            el('span', { class: 'catbar-icon', text: cat ? cat.icon : '?',
+              style: 'background:' + U.tintOf(cat ? cat.color : 'blue') }),
+            el('div', { class: 'catbar-main' }, [
+              el('div', { class: 'catbar-top' }, [
+                el('span', { class: 'catbar-name', text: cat ? cat.name : 'Uncategorized' }),
+                el('span', { class: 'catbar-val', text: fmtEUR(value) })
+              ]),
+              el('div', { class: 'catbar-track' }, [
+                el('div', { class: 'catbar-fill',
+                  style: 'width:' + (maxV > 0 ? (value / maxV) * 100 : 0) + '%;background:' + color })
+              ])
             ]),
-            el('div', { class: 'catbar-track' }, [
-              el('div', { class: 'catbar-fill',
-                style: 'width:' + (maxV > 0 ? (value / maxV) * 100 : 0) + '%;background:' + color })
-            ])
-          ]),
-          el('span', { class: 'catbar-pct', text: share + '%' }),
-          el('span', { class: 'catbar-chev', text: '›' })
-        ]));
-      });
+            el('span', { class: 'catbar-pct', text: share + '%' }),
+            el('span', { class: 'catbar-chev', text: '›' })
+          ]));
+        });
+      };
+      draw();
+      donutCard.append(wrap, list);
+      return donutCard;
     };
-    draw();
-    donutCard.append(wrap, list);
-    root.append(donutCard);
+
+    renderBlocks(root, 'stats-overview', {
+      tiles: tilesBlock,
+      compare: () => comparisonCard(rg),
+      inout: inoutBlock,
+      net: netBlock,
+      categories: categoriesBlock
+    });
   }
 
   /** An all-zero Overview has four very different causes and used to look
@@ -1559,18 +1772,14 @@
     const catName = (id) => { const c = DB.category(id); return c ? c.name : 'Uncategorized'; };
     const catColor = (id) => { const c = DB.category(id); return U.colorOf(c ? c.color : 'blue'); };
 
-    root.append(mixCard(months, ranked, monthTotal));
-    if (months.length >= 2) {
-      const mv = moversCard(months, perCat);
-      if (mv) root.append(mv);
-    }
-    const pc = paceCard(months, exp);
-    if (pc) root.append(pc);
-    const fx = fixedCard(months, exp, idx);
-    if (fx) root.append(fx);
-    const sv = savingsCard(months, txs, idx);
-    if (sv) root.append(sv);
-    root.append(weekdayCard(months, exp));
+    renderBlocks(root, 'stats-trends', {
+      mix: () => mixCard(months, ranked, monthTotal),
+      movers: () => (months.length >= 2 ? moversCard(months, perCat) : null),
+      pace: () => paceCard(months, exp),
+      fixed: () => fixedCard(months, exp, idx),
+      savings: () => savingsCard(months, txs, idx),
+      weekday: () => weekdayCard(months, exp)
+    });
 
     /* ---------- Card: category mix over time ---------- */
     function mixCard(months, ranked, monthTotal) {
