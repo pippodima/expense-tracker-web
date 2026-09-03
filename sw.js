@@ -1,6 +1,6 @@
 /* Service worker: network-first for our own files (so updates always reach the
    device when online), cache fallback so the app still works fully offline. */
-const CACHE = 'expense-tracker-v37';
+const CACHE = 'expense-tracker-v38';
 const ASSETS = [
   './',
   './index.html',

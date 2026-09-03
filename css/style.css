@@ -435,8 +435,11 @@ h2 { font-size: 1.05rem; }
   flex: 0 0 auto;
 }
 .tx-main { flex: 1; min-width: 0; }
-.tx-title { font-size: 0.92rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tx-sub { font-size: 0.75rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Both rows are built from <span>s, and a span inside .tx-main is not a flex item,
+   so it stays inline: title and subtitle shared one line and the subtitle ran under
+   the amount, with ellipsis silently doing nothing (it needs a block box). */
+.tx-title { display: block; font-size: 0.92rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tx-sub { display: block; font-size: 0.75rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tx-amt { font-weight: 700; font-size: 0.95rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tx-amt.pos { color: var(--good); }
 .tx-amt.neutral { color: var(--muted); }
