@@ -23,3 +23,6 @@ __pycache__/
 test.txt
 *.paste.txt
 test.json
+
+# Generated demo dataset for screenshots (rebuild with: node tools/demo-data.js)
+tools/demo-backup.json

@@ -62,8 +62,10 @@ Static files, loaded in order by `index.html`:
 | `sw.js` | Service worker — precache app shell, cache-first, offline fallback |
 | `manifest.webmanifest` | PWA manifest (standalone, icons, `?action=add` shortcut) |
 | `icons/` | Generated € app icons (180 / 192 / 512) |
-| `sync/bank_sync.py` | **Bank sync tool** (not part of the served app's runtime): stdlib-only Python, runs on the iPhone in a-Shell/iSH; GoCardless PSD2 → `bank-sync-*.json` |
-| `sync/README.md`, `sync/.env.example` | Setup docs + config template; real `.env`, `state.json`, `.tokens.json` are gitignored |
+| `sync/paste_to_sync.py` | **Statement converter** (not part of the served app's runtime): stdlib-only Python, runs on the iPhone in a-Shell/iSH; pasted statement text → `bank-sync-*.json` |
+| `sync/README.md` | Setup + usage docs for the converter; pasted statements and their output are gitignored |
+| `tests/` | Zero-dependency Node suite: `run.js` (syntax → scope-check → unit tests) plus `*.test.js` |
+| `README.md`, `LICENSE` | Public-facing description of the project; MIT |
 
 There is **no framework**. State lives in `DB.state` (the source of truth, mirrored to
 IndexedDB) plus a small `ui` object in `app.js` for view/filter state. The service worker
@@ -142,21 +144,17 @@ transaction. Settings explains the two setup paths clearly: **Home Screen** (add
 the Home Screen directly — no Shortcut) and **Lock Screen** (a one-time Shortcut wrapping the
 link, since the Lock Screen only accepts widgets).
 
-**Bank sync (buddybank / UniCredit via GoCardless, phone-only):** `sync/bank_sync.py` runs
-**on the iPhone** in the free a-Shell (or iSH) terminal app — no Mac, no server. Commands:
-`link` (90-day PSD2 consent flow: agreement → requisition → bank auth URL → account UUIDs
-stored locally), `sync [--dry-run] [--force]` (fetch booked transactions → signed-amount
-mapping → `bank-sync-YYYY-MM-DD.json`), `status`. It caches the 24h access token, renews via
-the 30-day refresh token, enforces the free tier's 4-calls/account/day limit (6h minimum
-between syncs), skips pending transactions (unstable IDs), and detects the expired-consent
-API error with a clear "re-link" message. The app imports the file (Settings → Bank sync):
-first import asks to map bank-account UUIDs to app accounts (saved for reuse), then it
-**upserts by `externalId`** — re-imports are idempotent, manual entries (no externalId)
-untouched, bank corrections update date/amount/type while preserving the user's category.
-Unmatched descriptions land in **Uncategorized** and a **review queue** (Home banner +
-Settings), where assigning a category can also create a rule (substring or **regex**) that
-immediately sweeps the rest of the queue. Consent expiry is mirrored in-app with warnings
-from 7 days out. Rules now support regex patterns (seeded example: `ANTHROPIC` → Software).
+**Statement import (buddybank / UniCredit, phone-only):** `sync/paste_to_sync.py` runs **on the
+iPhone** in the free a-Shell (or iSH) terminal app — no Mac, no server, no API, no keys. You
+copy the transaction list out of the bank app, paste it into a text file, and the script turns
+it into `bank-sync-YYYY-MM-DD.json`; the app imports it under Settings → Import transactions →
+**Import statement file**. Every row carries a stable `externalId`, so the import
+**upserts** — re-importing the same file is idempotent, manual entries (no externalId) are
+untouched, and a bank row matching a manual entry by date+amount is *adopted* rather than
+duplicated. Unmatched descriptions land in **Uncategorized** and a **review queue** (Home
+banner + Settings), where assigning a category can also create a rule (substring or **regex**)
+that immediately sweeps the rest of the queue. (The earlier GoCardless PSD2 API path was
+removed in Chapter 21 — this converter is the workflow actually in use.)
 
 ---
 
@@ -873,3 +871,79 @@ newly-added blocks), the render pass (hidden never built, null skipped), the she
 eye writing to meta, and the drag itself — dragging down two slots, to the top, a one-slot
 nudge, a wobble that must change nothing, a yank past the end that clamps, and a single row
 that must not crash.
+
+### Chapter 36 — A front door for the repo (2026-09-03)
+Request: make the repository understandable to someone who lands on it cold — a description, a
+README, a licence, "everything to make it look good".
+
+Until now the only description of this project was *this diary*: 875 lines, oldest-first,
+written for us. It's the right artefact for remembering **why**, and the wrong one for a
+stranger deciding in ten seconds whether the project is interesting. So the diary keeps its
+job and a `README.md` takes the other one.
+
+Shipped:
+- **`README.md`** — the pitch first (private, offline, no server, data as files), then why it
+  exists, the feature set grouped by daily use / money model / stats / import / privacy, a
+  quick start (`python3 -m http.server`, plus the GitHub Pages → Safari → Add to Home Screen
+  path), the file-by-file structure table, how to run the tests and what each of the three
+  layers catches, the known limitations *with their reasons*, and contributing notes that lead
+  with the constraints — because on this project the constraints are the product, and a PR that
+  adds a dependency or a network call is the likeliest way to break it.
+- **`LICENSE`** — MIT, 2026. Badges in the README for licence, CI, no-dependencies, no-build,
+  PWA.
+- **`.github/workflows/tests.yml`** — checkout, Node 20, `node tests/run.js`. Nothing to
+  install, so CI is six lines of real work; the badge is honest because the suite is the same
+  command we run locally.
+- **GitHub metadata** — repo description and ten topics (`pwa`, `offline-first`,
+  `vanilla-javascript`, `indexeddb`, `privacy`, `ios`, …), so the repo is findable and its
+  About box says something.
+
+Also corrected here: the sections above the timeline still described `sync/bank_sync.py` and the
+GoCardless PSD2 flow in the architecture table and in "Current state" — both deleted back in
+Chapter 21. Writing a README that had to be *accurate* is what surfaced it, which is an argument
+for the README beyond politeness to strangers.
+
+Left alone deliberately: `convert.py` at the repo root, an untracked near-copy of
+`sync/paste_to_sync.py` minus its docstring. It's either a scratch edit or a newer version —
+either way that's a call to make with the file open, not while writing docs.
+
+### Chapter 37 — Screenshots, and the bug they found (2026-09-03)
+A money app is judged on what it looks like, and the README described a UI nobody could see.
+Two constraints shaped the answer: the repo is public, so no real spending history goes in it,
+and the app has no dependencies, so the capture tooling can't either.
+
+- **`tools/demo-data.js`** — a seeded generator (mulberry32, so a commit always renders the same
+  charts) producing ~470 invented transactions over 14 months as a normal backup file. It has to
+  be *rich*, not just non-empty: the blocks hide themselves when they have nothing to say, so it
+  seeds a monthly budget, four confirmed subscriptions, per-category limits, monthly transfers
+  to savings and cash, a hot December and a quiet February for "What changed", and the Istanbul
+  trip priced in lira. `lastBackup` is set so the reminder popup doesn't cover the screen we
+  came to photograph.
+- **`tools/screenshots.js`** — serves the repo over http (a service worker needs a real origin),
+  seeds IndexedDB through `DB.replaceAll` — the same path a restored backup takes — reloads, and
+  walks the tabs at 390×844@2x. Puppeteer is installed *outside* the repo and reached via
+  `NODE_PATH`, so the app's zero-dependency claim stays true.
+
+Three things the capture taught us, each a small lesson about screenshots being a *test*:
+1. Today's random rolls put Home over budget about half the time. Accurate, and a terrible
+   first impression — so the generator keeps the current day light and the hero reads
+   "Left to spend today" in green.
+2. Stats opened on a three-day-old month: "Income 0,00 €" on the page whose whole job is
+   comparison. The script now steps back one month to the last complete one.
+3. Selectors like `.month-nav .mn-btn` matched the *hidden Home* copy first, and a sheet left
+   open swallowed the next tab tap and silently produced a duplicate image. Both now scoped and
+   awaited.
+
+**And a real bug, found because a screenshot can't look away.** The Activity list rendered the
+merchant name, the "category · account" subtitle and the amount all on one line, overlapping.
+Cause: `renderTxRow` (and `openReviewSheet`) build the row from `<span>`s. `.tx-main` is a flex
+*item*, so it blockifies — but its children aren't, so `.tx-title` and `.tx-sub` stayed
+`display: inline`, sat side by side, and their `text-overflow: ellipsis` did nothing, because
+ellipsis needs a block box. Measured in-page before and after: the subtitle used to end at
+342 px with the amount starting at 288 px. Fixed with `display: block` on both classes — one
+CSS change rather than editing two call sites — cache bumped to `expense-tracker-v38`.
+Present since 2026-07-23 (Chapter 7), in the app's most-used list.
+
+Six images land in `docs/screenshots/` and open the README. The generated
+`tools/demo-backup.json` is gitignored: the generator is deterministic, so the output is
+reproducible rather than worth committing.
