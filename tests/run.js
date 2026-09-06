@@ -43,7 +43,11 @@ const GUARDED = ['renderDashboard', 'budgetCard', 'budgetStatus', 'tripBudgetSta
   'renderStats', 'statsOverview', 'statsTrends', 'trendMonths', 'statsEmptyNote',
   'statsCalendar', 'statsMerchants', 'statsTrips', 'openTxSheet', 'openTripDetail',
   'openCategoryDetail', 'renderTransactions', 'renderAccounts', 'renderSettings',
-  'tripCharts', 'renderBlocks', 'openArrangeSheet', 'makeSortable', 'blockSequence', 'refreshToday', 'exportJSON', 'exportEncrypted', 'importJSON', 'repairData'];
+  'tripCharts', 'renderBlocks', 'openArrangeSheet', 'makeSortable', 'blockSequence', 'refreshToday', 'exportJSON', 'exportEncrypted', 'importJSON', 'repairData',
+  'openMappingSheet', 'openImportPreview', 'planImportCategories'];
+/* Not guardable here: a function whose body holds regex literals (catEmojiFor) trips
+   the checker, which strips strings but not regexes and so reads `a|b` alternations as
+   identifiers. import-categories.test.js covers that one directly instead. */
 if (!run([path.join(__dirname, 'scope-check.js'), ...GUARDED], 'scope')) failed++;
 
 for (const f of fs.readdirSync(__dirname).filter((n) => n.endsWith('.test.js')).sort()) {

@@ -947,3 +947,53 @@ Present since 2026-07-23 (Chapter 7), in the app's most-used list.
 Six images land in `docs/screenshots/` and open the README. The generated
 `tools/demo-backup.json` is gitignored: the generator is deterministic, so the output is
 reproducible rather than worth committing.
+
+### Chapter 38 — Import: categories that come from the file (2026-09-06)
+Request, with a sample: an export shaped
+`date,account,category,amount,currency,converted amount,currency,description` where the
+**description column is empty** and the real information sits in a **category** column
+(Intrattenimento, Ristorante, Bar). Until now the importer read only the description and ran it
+through the keyword rules, so a file like that imported entirely into *Uncategorized/Other* —
+the one column that actually knew the answer was ignored.
+
+`Detect.detectColumns` had returned a `category` candidate since Chapter 24; nothing consumed
+it. Now the wizard does.
+
+- **Mapping step** gains an optional **Category column** picker, defaulting to whatever was
+  detected and offering *"None — use my keyword rules"*. It rides along in bank presets
+  (`catCol` / `catName`); a preset saved before today simply has none.
+- **Confirm step** gains a **New categories** card. Names are matched against the app's own by
+  `catKey()` — case, accents and inner spacing don't count, so `SANITÀ`, `Sanità` and `sanita`
+  are one category. Matches are reused; the rest are listed with a guessed icon, a colour that
+  *continues* the palette rather than restarting it, and a count of affected rows. Each can be
+  switched off individually, and switching one off drops those rows back to the keyword rules,
+  with the summary and preview table updating live.
+- **Precedence**: the file's category beats a keyword rule. It's what the user actually filed
+  the transaction under; our rules are an inference. An empty cell still falls through to the
+  rules, then to *Other*.
+- `catEmojiFor()` guesses an icon from the name in Italian or English (Ristorante → 🍽️,
+  Bar → ☕, Intrattenimento → 🎬, Stipendio → 💰), falling back to 📦. Only a guess — everything
+  is editable in Settings afterwards.
+
+Two ordering details that would have been bugs. New categories can't be assigned while parsing
+rows, because they don't exist until the user agrees to create them; so rows carry `_rawCat`
+and `assignCategories()` runs afterwards, again after creation. And creation has to happen
+*before* the cash-withdrawal pass, which nulls the category on rows it converts to transfers —
+the other order would have resurrected a category on a transfer.
+
+`tests/import-categories.test.js`: 30 checks over name matching (case, accents, spacing, blanks,
+a duplicate name already in the app), the sample file itself (3 distinct names from 4 rows, in
+first-seen order, repeat counted twice, distinct palette colours continuing past the existing
+categories) and the icon guesses. One of them found a real gap on the first run: *Sanità*, a
+common Italian category name, fell through to 📦.
+
+`openMappingSheet` and `openImportPreview` joined the scope-check list — this is exactly the
+Chapter 28 failure mode, and both are now guarded. `catEmojiFor` can't be: the checker strips
+strings but not regex literals, so it reads an `a|b` alternation as undeclared identifiers. Its
+unit test covers it instead, and the limitation is now written down in `tests/run.js`.
+
+**Known interaction, not fixed here.** Duplicate detection keys on date + amount + description.
+With this file shape the description is empty, so two genuinely different transactions of the
+same amount on the same day look identical and the second is skipped. Widening the key to
+include the category would help but not settle it, and it would have to change
+`existingDupKeys()` in step — a deliberate decision for its own chapter.

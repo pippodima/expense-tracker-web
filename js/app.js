@@ -5307,6 +5307,76 @@
 
   /* ======================= CSV import wizard ======================= */
 
+  /* ---- Categories carried by the file itself ----
+     An export from another money app usually already has a category column, and it
+     is better evidence than our keyword rules: it is what the user actually filed
+     the transaction under. Names that match a category here are reused; the rest can
+     be created, so importing a year of history doesn't land wholesale in "Other". */
+
+  /** Comparison form for a category name: case, accents and spacing don't count. */
+  function catKey(s) {
+    return String(s == null ? '' : s).trim().toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
+  }
+
+  /** A plausible icon for a category we've never seen, in Italian or English.
+      Only a guess — the user can change it in Settings like any other category. */
+  function catEmojiFor(name) {
+    const TABLE = [
+      [/spesa|spese|grocer|supermerc|alimentar/, '🛒'],
+      [/ristorant|restaurant|pizz|trattoria|sushi|mensa/, '🍽️'],
+      [/^bar$|caffe|caff\b|coffee|colazione/, '☕'],
+      [/intrattenim|entertain|svago|cinema|concert|musica|music/, '🎬'],
+      [/giochi|gioco|gaming|videogame|game/, '🎮'],
+      [/benzina|carburant|fuel|rifornim/, '⛽'],
+      [/auto|macchina|\bcar\b|parcheg|parking/, '🚗'],
+      [/trasport|transport|viaggi|treno|train|taxi|\bbus\b|metro/, '🚌'],
+      [/shopping|abbigliam|vestit|clothes|clothing/, '🛍️'],
+      [/bollett|utenz|utilit|bills?|luce|energia|gas\b/, '💡'],
+      [/casa|affitto|rent|home|house|mutuo/, '🏠'],
+      [/telefon|phone|mobile|internet|wifi/, '📱'],
+      [/salute|sanita|health|farmac|medic|dottore|dentist/, '💊'],
+      [/sport|palestra|\bgym\b|fitness|benessere/, '❤️'],
+      [/libri|book|scuola|school|corso|course/, '📚'],
+      [/volo|flight|aereo|airline/, '✈️'],
+      [/vacanz|holiday|vacation|hotel/, '🏖️'],
+      [/regal|gift/, '🎁'],
+      [/stipendio|salary|salari|paycheck|entrate|income/, '💰'],
+      [/lavoro|work|business|freelance/, '💼'],
+      [/investim|invest|risparmi|saving/, '📈'],
+      [/animal|\bpet\b|cane|gatto/, '🐾'],
+      [/bambin|bimb|child|baby|figli/, '👶'],
+      [/universit|studi|educaz|educat/, '🎓'],
+      [/ripar|repair|manutenz|maintenance/, '🔧']
+    ];
+    const n = catKey(name);
+    for (const [re, icon] of TABLE) if (re.test(n)) return icon;
+    return '📦';
+  }
+
+  /** Match a file's category names against the app's own.
+      Returns { existing: Map(key → categoryId), fresh: [{ key, name, icon, color, count }] },
+      `fresh` in first-seen order, each with a colour that continues the palette rather
+      than repeating one. */
+  function planImportCategories(rawNames, cats) {
+    const existing = new Map();
+    for (const c of cats) {
+      const k = catKey(c.name);
+      if (k && !existing.has(k)) existing.set(k, c.id);
+    }
+    const fresh = new Map();
+    for (const raw of rawNames) {
+      const k = catKey(raw);
+      if (!k || existing.has(k)) continue;
+      if (fresh.has(k)) { fresh.get(k).count++; continue; }
+      fresh.set(k, {
+        key: k, name: String(raw).trim(), icon: catEmojiFor(raw), count: 1,
+        color: U.PALETTE_ORDER[(cats.length + fresh.size) % U.PALETTE_ORDER.length]
+      });
+    }
+    return { existing, fresh: [...fresh.values()] };
+  }
+
   /** Import any bank CSV or another app's JSON export: the shape is worked out
       from the header names *and* the values, then shown for confirmation. */
   function openCsvWizard() {
@@ -5356,6 +5426,7 @@
       dateCol: 0, descCol: 1, mode: 'single',
       amountCol: Math.max(rows[0].length - 1, 2), debitCol: 2, creditCol: 3,
       invert: false,
+      catCol: null,
       accountId: DB.state.accounts[0].id
     };
     // Detection: header names + what the values actually look like
@@ -5364,6 +5435,7 @@
     if (guess.date) st.dateCol = guess.date.i;
     if (guess.description) st.descCol = guess.description.i;
     if (guess.amount) st.amountCol = guess.amount.i;
+    if (guess.category) st.catCol = guess.category.i;
     if (guess.pair) {
       st.mode = 'double';
       st.debitCol = guess.debit.i;
@@ -5427,6 +5499,8 @@
             st.amountCol = byName(m.amountName, m.amountCol);
             st.debitCol = byName(m.debitName, m.debitCol);
             st.creditCol = byName(m.creditName, m.creditCol);
+            // A preset saved before category columns existed simply has none
+            st.catCol = m.catCol == null ? null : byName(m.catName, m.catCol);
             draw();
           });
           body.append(el('div', { class: 'field' }, [pre]));
@@ -5440,6 +5514,14 @@
         const descSel = colOptions(st.descCol);
         dateSel.addEventListener('change', () => { st.dateCol = +dateSel.value; });
         descSel.addEventListener('change', () => { st.descCol = +descSel.value; });
+
+        // Optional: a column already holding the category, as other money apps export
+        const catSel = colOptions(st.catCol == null ? 0 : st.catCol);
+        catSel.prepend(el('option', { value: '', text: 'None — use my keyword rules' }));
+        catSel.value = st.catCol == null ? '' : String(st.catCol);
+        catSel.addEventListener('change', () => {
+          st.catCol = catSel.value === '' ? null : +catSel.value;
+        });
 
         const modeSeg = el('div', { class: 'seg seg-4' });
         const bSingle = el('button', { text: 'Signed amount', class: st.mode === 'single' ? 'active' : '' });
@@ -5575,6 +5657,12 @@
           el('div', { class: 'field' }, [el('label', { text: 'Date column' }), dateSel]),
           fmtRow,
           el('div', { class: 'field' }, [el('label', { text: 'Description column' }), descSel]),
+          el('div', { class: 'field' }, [
+            el('label', { text: 'Category column (optional)' }), catSel,
+            el('div', { class: 'note-suggest', text:
+              'Names matching your categories are reused; the rest can be created in the ' +
+              'next step. Leave as None to categorize from your keyword rules instead.' })
+          ]),
           el('div', { class: 'field' }, [el('label', { text: 'Amount layout' }), modeSeg]),
           amountFields,
           el('div', { class: 'field' }, [el('label', { text: 'Import into account' }), acctSel]),
@@ -5589,12 +5677,13 @@
                     hasHeader: st.hasHeader, mode: st.mode, invert: st.invert,
                     typeCol: st.typeCol, typeMap: st.typeMap,
                     dateCol: st.dateCol, descCol: st.descCol, amountCol: st.amountCol,
-                    debitCol: st.debitCol, creditCol: st.creditCol,
+                    debitCol: st.debitCol, creditCol: st.creditCol, catCol: st.catCol,
                     dateName: st.hasHeader ? rows[0][st.dateCol] : null,
                     descName: st.hasHeader ? rows[0][st.descCol] : null,
                     amountName: st.hasHeader ? rows[0][st.amountCol] : null,
                     debitName: st.hasHeader ? rows[0][st.debitCol] : null,
-                    creditName: st.hasHeader ? rows[0][st.creditCol] : null
+                    creditName: st.hasHeader ? rows[0][st.creditCol] : null,
+                    catName: st.hasHeader && st.catCol != null ? rows[0][st.catCol] : null
                   }
                 });
               }
@@ -5646,29 +5735,69 @@
       if (existing.has(key) || seen.has(key)) { dups.push(r); continue; }
       seen.add(key);
 
-      const cat = DB.suggestCategory(desc);
-      const fallback = DB.state.categories.find((c) => c.name === 'Other') || DB.state.categories[0];
       good.push({
         id: null,
         date: dateISO,
         amount: Math.abs(signed),
         type: signed >= 0 ? 'income' : 'expense',
-        categoryId: (cat || fallback).id,
+        categoryId: null,                       // resolved below, once the plan is known
         accountId: st.accountId,
         note: desc,
-        _suggested: !!cat,
+        _rawCat: st.catCol == null ? '' : String(r[st.catCol] || '').trim(),
         // Money leaving the bank with a withdrawal wording: probably cash, not spending
         _withdrawal: signed < 0 && Detect.looksWithdrawal(desc)
       });
     }
 
+    /* Categories can't be assigned row by row above: the ones the file names but the
+       app doesn't have yet don't exist until the user agrees to create them. */
+    const plan = st.catCol == null
+      ? { existing: new Map(), fresh: [] }
+      : planImportCategories(good.map((g) => g._rawCat), DB.state.categories);
+    const toCreate = new Set(plan.fresh.map((f) => f.key));   // every new name, on by default
+    const freshByKey = new Map(plan.fresh.map((f) => [f.key, f]));
+
+    /* Precedence: the file's own category beats a keyword rule, because it's what the
+       user actually filed the transaction under rather than something we inferred. */
+    function assignCategories() {
+      const fallback = DB.state.categories.find((c) => c.name === 'Other') ||
+        DB.state.categories[0];
+      for (const g of good) {
+        const k = catKey(g._rawCat);
+        if (k && plan.existing.has(k)) { g.categoryId = plan.existing.get(k); g._catSource = 'file'; }
+        else if (k && toCreate.has(k)) { g.categoryId = null; g._catSource = 'new'; }
+        else {
+          const c = DB.suggestCategory(g.note);
+          g.categoryId = (c || fallback).id;
+          g._catSource = c ? 'rule' : 'fallback';
+        }
+      }
+    }
+    assignCategories();
+
+    /** What the Category cell should read, including categories not created yet. */
+    const catLabel = (g) => {
+      if (g._catSource === 'new') {
+        const f = freshByKey.get(catKey(g._rawCat));
+        return f ? f.icon + ' ' + f.name + ' · new' : '';
+      }
+      const c = DB.category(g.categoryId);
+      return c ? c.icon + ' ' + c.name : '';
+    };
+
     openSheet('Confirm import', (body, api) => {
       const summary = el('div', { class: 'import-summary card' });
-      summary.innerHTML =
-        `<span class="ok">${good.length} new transactions</span> ready to import<br>` +
-        `<span class="dup">${dups.length} duplicates skipped (same date + amount + description)</span><br>` +
-        (invalid ? `<span class="dup">${invalid} rows skipped (no valid date/amount)</span><br>` : '') +
-        `<span class="dup">${good.filter((g) => g._suggested).length} auto-categorized by your rules</span>`;
+      const drawSummary = () => {
+        const fromFile = good.filter((g) => g._catSource === 'file' || g._catSource === 'new').length;
+        summary.innerHTML =
+          `<span class="ok">${good.length} new transactions</span> ready to import<br>` +
+          `<span class="dup">${dups.length} duplicates skipped (same date + amount + description)</span><br>` +
+          (invalid ? `<span class="dup">${invalid} rows skipped (no valid date/amount)</span><br>` : '') +
+          (st.catCol == null ? ''
+            : `<span class="dup">${fromFile} categorized from the file</span><br>`) +
+          `<span class="dup">${good.filter((g) => g._catSource === 'rule').length} auto-categorized by your rules</span>`;
+      };
+      drawSummary();
       body.append(summary);
 
       // --- Cash withdrawals: offer to book them as transfers to a cash account ---
@@ -5722,27 +5851,70 @@
         st._wset = wset;
       }
 
-      if (good.length) {
+      // --- Categories the file names but this app doesn't have yet ---
+      const previewWrap = el('div');
+      const drawPreview = () => {
+        previewWrap.innerHTML = '';
+        if (!good.length) return;
         const prev = el('div', { class: 'csv-preview' });
         const table = el('table');
         const tr = el('tr');
         ['Date', 'Description', 'Amount', 'Category'].forEach((h) => tr.append(el('th', { text: h })));
         table.append(tr);
         good.slice(0, 8).forEach((g) => {
-          const cat = DB.category(g.categoryId);
           const row = el('tr');
           row.append(
             el('td', { text: U.fmtDate(g.date, { day: '2-digit', month: '2-digit', year: 'numeric' }) }),
             el('td', { text: g.note.slice(0, 30) }),
             el('td', { text: (g.type === 'income' ? '+' : '−') + fmtEUR(g.amount) }),
-            el('td', { text: cat ? cat.icon + ' ' + cat.name : '' })
+            el('td', { text: catLabel(g) })
           );
           table.append(row);
         });
         prev.append(table);
-        body.append(prev);
-        if (good.length > 8) body.append(el('p', { class: 'muted', text: '…and ' + (good.length - 8) + ' more' }));
+        previewWrap.append(prev);
+        if (good.length > 8) {
+          previewWrap.append(el('p', { class: 'muted', text: '…and ' + (good.length - 8) + ' more' }));
+        }
+      };
+
+      if (plan.fresh.length) {
+        const matched = new Set(good.filter((g) => g._catSource === 'file')
+          .map((g) => catKey(g._rawCat))).size;
+        const card = el('div', { class: 'card' }, [
+          el('div', { class: 'card-head' }, [
+            el('h2', { text: 'New categories' }),
+            el('span', { class: 'muted', text: plan.fresh.length + ' found' })
+          ]),
+          el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:10px', text:
+            'The file files these transactions under names you don\'t have yet' +
+            (matched ? ' (' + matched + ' other name' + (matched === 1 ? '' : 's') +
+              ' already matched your categories)' : '') +
+            '. Create them and the history keeps its own categories; leave one off and ' +
+            'those rows fall back to your keyword rules. You can rename or re-icon any of ' +
+            'them later in Settings.' })
+        ]);
+        plan.fresh.forEach((f) => {
+          const cb = el('input', { type: 'checkbox' });
+          cb.checked = true;
+          cb.addEventListener('change', () => {
+            if (cb.checked) toCreate.add(f.key); else toCreate.delete(f.key);
+            assignCategories(); drawSummary(); drawPreview();
+          });
+          card.append(el('label', { class: 'switch-row' }, [
+            el('span', { class: 'tx-icon', text: f.icon, style: 'background:' + U.tintOf(f.color) }),
+            el('div', { class: 's-main' }, [
+              el('div', { text: f.name }),
+              el('div', { class: 's-sub', text: f.count + ' transaction' + (f.count === 1 ? '' : 's') })
+            ]),
+            cb
+          ]));
+        });
+        body.append(card);
       }
+
+      drawPreview();
+      body.append(previewWrap);
 
       body.append(
         el('div', { class: 'spacer' }),
@@ -5751,6 +5923,15 @@
           text: good.length ? 'Import ' + good.length + ' transactions' : 'Nothing to import',
           onclick: async () => {
             if (!good.length) return;
+            /* Create first, then re-resolve: the withdrawal pass below clears the
+               category on rows it turns into transfers, so it has to run after this. */
+            const creating = plan.fresh.filter((f) => toCreate.has(f.key));
+            if (creating.length) {
+              const objs = creating.map((f) => ({ id: null, name: f.name, icon: f.icon, color: f.color }));
+              await DB.bulkPut('categories', objs);        // bulkPut fills in each id
+              creating.forEach((f, i) => plan.existing.set(f.key, objs[i].id));
+              assignCategories();
+            }
             const wcfg = st._wset;
             if (wcfg && wcfg.mode === 'transfer' && wcfg.toAccountId) {
               good.forEach((g) => {
@@ -5766,7 +5947,9 @@
             } else if (wcfg) {
               await DB.setMeta('withdrawalSettings', { mode: 'expense' });
             }
-            good.forEach((g) => { delete g._suggested; delete g._withdrawal; });
+            good.forEach((g) => {
+              delete g._withdrawal; delete g._rawCat; delete g._catSource;
+            });
             await DB.bulkPut('transactions', good);
             await bumpChanges(good.length);
             api.close();
