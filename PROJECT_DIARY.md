@@ -1027,3 +1027,60 @@ Shipped:
 The lesson worth keeping: *verified in a browser* and *reaching the user's device* are two
 different claims, and only the first was tested. A version string in the UI is the cheapest
 possible instrument for telling them apart.
+
+### Chapter 40 — Spending that shouldn't shape the daily allowance (2026-09-06)
+The car breaks. 900 € against a 1.800 € budget, and the redistributing mode divides what's
+left across the days remaining: the app announces roughly 0 €/day for three weeks. Accurate
+arithmetic, useless advice, and it arrives exactly when the month already feels bad.
+
+Before this there was exactly one budget exemption in the whole app — `countsInBudget` was
+four lines, exempting only expenses inside a trip with its own pot.
+
+**The design decision that shaped everything else:** the first sketch keyed the offer off
+size — "more than 25% of the budget". The user pushed back, correctly: people want to exclude
+small things too. So the rule became **relative, never absolute** — an expense is unusual when
+it is ≥3× the median of *its own category's* last six months. That inverts the naive version
+in both directions: rent, the largest line every single month, is never flagged; a 35 € charge
+in a category that normally sees 8 € is. An absolute threshold gets both of those backwards.
+
+Three ways in, one primitive underneath:
+- **`excludeFromBudget` on the transaction**, deliberately **tri-state**. `true` and `false`
+  are the user's explicit word; `undefined` defers to the rules. That is what lets someone
+  re-include a single charge without abandoning the rule that caught it — and it doubles as
+  the "don't ask again" record for a dismissed suggestion.
+- **A category flag** (`meta.budgetSkip.categories`): Health, Taxes, Car. Handles small
+  amounts with no per-transaction decision at all, which is the case a size threshold could
+  never reach.
+- **Note keywords** (`meta.budgetSkip.keywords`), the user's own words — the same shape as the
+  category rules, so it needs no new concept explained.
+
+Everything funnels through `budgetSkipReason(t)` → `countsInBudget`, one choke point, and the
+same reason excludes an expense from a *trip's* pot too — "don't count this against my budget"
+shouldn't depend on which pot it landed in.
+
+**Excluded is not hidden.** The money still counts in Net, Stats, category totals and the
+account balance; only the allowance skips it. The card says so out loud —
+`1.469,00 € left · 60,00 €/day base · 80,00 € excluded` — because a meter that quietly ignores
+money stops being a meter.
+
+Two pre-existing bugs surfaced while wiring this up, both about durability:
+- **Backups carried almost nothing.** `buildBackupPayload` whitelisted three meta keys, so
+  **trips, confirmed subscriptions, category limits and the block layout were all lost on
+  restore or device transfer** — despite Chapter 35 claiming the block layout "rides along
+  inside backups". It didn't. The whitelist now carries every setting the user configured by
+  hand, and still excludes the four device-local bookkeeping keys (`lastBackup`,
+  `changesSinceBackup`, `backupSnoozeUntil`, `installedAt`), which would otherwise tell a
+  restored device it had just backed up.
+- **The merge path rebuilds each transaction field by field**, so anything not listed was
+  dropped: `origAmount` / `origCurrency` / `rate` — a merged trip lost the amounts as they were
+  actually paid — and `toAccountId`, which broke merged transfers. Both restored, along with
+  the new flag. Settings that name categories (`categoryBudgets`, `budgetSkip.categories`) now
+  travel through the same id remap the transactions do, or they'd point at categories that
+  don't exist on the receiving device.
+
+`tests/budget-exclusions.test.js`: 24 checks over the flag's three states, the category and
+keyword rules, the override interaction, and the detector — including the two cases that
+matter most, *rent is never flagged* and *a small unusual charge is*, plus insufficient
+history, the six-month window, and not re-asking once answered. Verified end-to-end in a
+browser as well: the Home prompt, the live recount after answering, the keyword rule, the
+Settings sheet, and the add sheet's switch flipping itself as a keyword is typed.

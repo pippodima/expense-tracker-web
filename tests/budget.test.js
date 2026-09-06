@@ -41,6 +41,7 @@ function world({ today, budget, mode = 'daily', trips = [], txs = [], period }) 
   vm.runInContext([
     'const tripSettings = () => Object.assign({ excludeFromStats: true }, DB.state.meta.tripSettings || {});',
     extract('tripForDate'), extract('isProtectedRecurring'), extract('tripExpenseOf'),
+    extract('budgetSkipCfg'), extract('budgetSkipReason'),
     extract('countsInStats'), extract('countsInBudget'),
     extract('budgetStatus'), extract('tripBudgetStatus'),
     'globalThis.bs = () => budgetStatus();',

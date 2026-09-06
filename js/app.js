@@ -408,10 +408,14 @@
       (t) => t.type === 'expense' && t.date >= r.from && t.date <= r.to &&
         countsInBudget(t));
     const spentMonth = exp.reduce((s, t) => s + t.amount, 0);
+    // Kept out of the allowance but still spent: shown so the meter stays believable
+    const excludedMonth = DB.state.transactions.filter(
+      (t) => t.type === 'expense' && t.date >= r.from && t.date <= r.to &&
+        budgetSkipReason(t)).reduce((s, t) => s + t.amount, 0);
     const today = U.todayISO();
     const isCurrent = today >= r.from && today <= r.to;
     const out = {
-      amount: b.amount, mode: b.mode || 'monthly', D, spentMonth,
+      amount: b.amount, mode: b.mode || 'monthly', D, spentMonth, excludedMonth,
       monthRemaining: b.amount - spentMonth, isCurrent
     };
     if (out.mode === 'daily' && isCurrent) {
@@ -481,18 +485,89 @@
     return !tripExpenseOf(t);
   }
 
+  /* ---- Expenses that shouldn't shape the daily allowance ----
+     A car repair or an annual insurance bill is real money, but averaging it across
+     the days left says "you have nothing to spend for three weeks", which is wrong
+     and unhelpful at once. Such an expense is kept out of the *allowance* only: it
+     still counts in Net, Stats, category totals and the account balance. */
+
+  function budgetSkipCfg() {
+    return Object.assign({ categories: [], keywords: [] }, DB.state.meta.budgetSkip || {});
+  }
+
+  /** 'once' | 'category' | 'keyword' when this expense sits outside the budget,
+      else null. `excludeFromBudget` is deliberately tri-state: true and false are
+      the user's explicit word either way, and undefined defers to the rules — so
+      re-including one charge doesn't mean abandoning the rule that caught it. */
+  function budgetSkipReason(t) {
+    if (t.excludeFromBudget === true) return 'once';
+    if (t.excludeFromBudget === false) return null;
+    const cfg = budgetSkipCfg();
+    if (t.categoryId && cfg.categories.includes(t.categoryId)) return 'category';
+    const note = String(t.note || '').toLowerCase();
+    if (note) {
+      for (const k of cfg.keywords) {
+        const text = String(k && k.text || '').trim().toLowerCase();
+        if (text && note.includes(text)) return 'keyword';
+      }
+    }
+    return null;
+  }
+
   /** Should this transaction draw down the ordinary monthly budget? */
   function countsInBudget(t) {
+    if (budgetSkipReason(t)) return false;
     const trip = tripExpenseOf(t);
     return !(trip && trip.budget > 0);   // only a budgeted trip has its own pot
+  }
+
+  /* Expenses in the shown month that are far out of line with what this user
+     normally spends in that same category. Deliberately relative, not a size
+     threshold: rent is the largest line every month and must never be flagged,
+     while a 35 € charge in a category that usually sees 8 € should be. */
+  function budgetOutliers() {
+    const FACTOR = 3;         // at least 3x the category's own median
+    const MIN_HISTORY = 4;    // fewer past charges than this and we can't judge
+    if (ui.period.type !== 'month') return [];
+    const r = U.monthRange(ui.period.y, ui.period.m0);
+    // Six months back. Built through Date so the year rolls; U.monthRange composes
+    // the string arithmetically and would render a negative month as "2026--5".
+    const p = new Date(ui.period.y, ui.period.m0 - 6, 1);
+    const priorFrom = p.getFullYear() + '-' +
+      String(p.getMonth() + 1).padStart(2, '0') + '-01';
+    const candidates = DB.state.transactions.filter(
+      (t) => t.type === 'expense' && t.date >= r.from && t.date <= r.to &&
+        t.excludeFromBudget === undefined && !budgetSkipReason(t) && t.categoryId);
+    if (!candidates.length) return [];
+
+    const history = new Map();       // categoryId -> past amounts, this month excluded
+    for (const t of DB.state.transactions) {
+      if (t.type !== 'expense' || !t.categoryId) continue;
+      if (t.date >= r.from || t.date < priorFrom) continue;
+      if (!history.has(t.categoryId)) history.set(t.categoryId, []);
+      history.get(t.categoryId).push(t.amount);
+    }
+
+    const out = [];
+    for (const t of candidates) {
+      const past = history.get(t.categoryId);
+      if (!past || past.length < MIN_HISTORY) continue;   // no basis to judge
+      const typical = median(past);
+      if (!(typical > 0)) continue;
+      const ratio = t.amount / typical;
+      if (ratio < FACTOR) continue;
+      out.push({ tx: t, typical, ratio });
+    }
+    return out.sort((a, b) => b.tx.amount - a.tx.amount).slice(0, 3);
   }
 
   /** Trip spending vs its own budget. */
   function tripBudgetStatus(trip) {
     if (!trip || !trip.budget) return null;
+    // An expense excluded from the budget is excluded from whichever pot it lands in
     const txs = DB.state.transactions.filter(
       (t) => t.type === 'expense' && t.date >= trip.from && t.date <= trip.to &&
-        !isProtectedRecurring(t));
+        !isProtectedRecurring(t) && !budgetSkipReason(t));
     const spent = txs.reduce((s, t) => s + t.amount, 0);
     const days = Math.round((new Date(trip.to) - new Date(trip.from)) / 86400000) + 1;
     const today = U.todayISO();
@@ -582,6 +657,86 @@
     }, { tall: true });
   }
 
+  /* Two standing ways to keep spending out of the daily allowance: a whole category
+     that simply isn't daily spending, and a keyword in the note — the same idea as
+     the category rules, so it needs no new concept explaining. */
+  function openBudgetSkipSheet() {
+    openSheet('Not daily spending', (body, api) => {
+      const cfg = budgetSkipCfg();
+      const cats = new Set(cfg.categories);
+      let keywords = cfg.keywords.map((k) => ({ id: k.id || U.uid(), text: k.text }));
+
+      body.append(el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:14px', text:
+        'Spending kept out of the daily allowance, so one heavy month doesn\'t leave ' +
+        'you with nothing to spend for three weeks. It still counts in your balance, ' +
+        'Net and every stat — it just doesn\'t shape the per-day figure.' }));
+
+      body.append(el('div', { class: 'field' },
+        [el('label', { text: 'Categories that aren\'t daily spending' })]));
+      DB.state.categories.forEach((c) => {
+        const cb = el('input', { type: 'checkbox' });
+        cb.checked = cats.has(c.id);
+        cb.addEventListener('change', () => {
+          if (cb.checked) cats.add(c.id); else cats.delete(c.id);
+        });
+        body.append(el('label', { class: 'switch-row' }, [
+          el('span', { class: 'cat-cell-icon', text: c.icon,
+            style: 'background:' + U.tintOf(c.color) }),
+          el('span', { class: 's-main', text: c.name }),
+          cb
+        ]));
+      });
+
+      body.append(el('hr', { class: 'sep' }),
+        el('div', { class: 'field' }, [el('label', { text: 'Keywords in the note' })]),
+        el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:10px', text:
+          'Any expense whose note contains one of these stays out of the daily budget. ' +
+          'Case doesn\'t matter. Useful for things like TASSE, ASSICURAZIONE or DENTISTA.' }));
+
+      const list = el('div');
+      const drawList = () => {
+        list.innerHTML = '';
+        if (!keywords.length) {
+          list.append(el('p', { class: 'muted', text: 'No keywords yet.' }));
+        }
+        keywords.forEach((k) => {
+          list.append(el('div', { class: 'rule-row' }, [
+            el('span', { class: 'rule-kw', text: k.text }),
+            el('button', { class: 'btn small ghost', text: 'Remove', onclick: () => {
+              keywords = keywords.filter((x) => x.id !== k.id); drawList();
+            } })
+          ]));
+        });
+      };
+      drawList();
+
+      const input = el('input', { type: 'text', placeholder: 'e.g. ASSICURAZIONE',
+        autocomplete: 'off', autocapitalize: 'characters' });
+      const add = () => {
+        const text = input.value.trim();
+        if (!text) return;
+        if (keywords.some((k) => k.text.toLowerCase() === text.toLowerCase())) {
+          return toast('Already there');
+        }
+        keywords.push({ id: U.uid(), text });
+        input.value = ''; drawList();
+      };
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+
+      body.append(list, el('div', { class: 'field-row' }, [
+        el('div', { class: 'field', style: 'flex:1' }, [input]),
+        el('button', { class: 'btn', text: 'Add', onclick: add })
+      ]));
+
+      body.append(el('div', { class: 'spacer' }), el('button', {
+        class: 'btn block primary', text: 'Save', onclick: async () => {
+          await DB.setMeta('budgetSkip', { categories: [...cats], keywords });
+          api.close(); toast('Saved'); render();
+        }
+      }));
+    }, { tall: true });
+  }
+
   function meter(value, max) {
     const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
     const over = value > max && max > 0;
@@ -658,8 +813,37 @@
       meter(bs.spentMonth, bs.amount),
       el('div', { class: 'muted', style: 'margin-top:6px', text:
         (mrem >= 0 ? fmtEUR(mrem) + ' left' : fmtEUR(-mrem) + ' over') +
-        ' · ' + (bs.mode === 'daily' ? fmtEUR(bs.dailyBase) + '/day base' : 'monthly cap') })
+        ' · ' + (bs.mode === 'daily' ? fmtEUR(bs.dailyBase) + '/day base' : 'monthly cap') +
+        // Say it out loud: money that left without moving the meter must be visible,
+        // or the meter quietly stops meaning anything.
+        (bs.excludedMonth > 0 ? ' · ' + fmtEUR(bs.excludedMonth) + ' excluded' : '') })
     );
+
+    // One-off spikes: offered, never decided for the user
+    budgetOutliers().forEach((o) => {
+      const c = DB.category(o.tx.categoryId);
+      const row = el('div', { class: 'budget-outlier' });
+      const apply = async (exclude) => {
+        await DB.put('transactions', Object.assign({}, o.tx, { excludeFromBudget: exclude }));
+        await bumpChanges(1);
+        render();
+        if (exclude) toast('Left out of the daily budget');
+      };
+      row.append(
+        el('div', { class: 'bo-main' }, [
+          el('div', { class: 'bo-title', text: fmtEUR(o.tx.amount) + ' · ' +
+            (c ? c.name : 'Uncategorized') }),
+          el('div', { class: 'bo-sub muted', text: Math.round(o.ratio) + '× your usual ' +
+            fmtEUR(o.typical) + ' — leave it out of the daily budget?' })
+        ]),
+        el('div', { class: 'bo-actions' }, [
+          el('button', { class: 'btn small', text: 'Keep', onclick: () => apply(false) }),
+          el('button', { class: 'btn small primary', text: 'Leave out',
+            onclick: () => apply(true) })
+        ])
+      );
+      card.append(row);
+    });
     return card;
   }
 
@@ -3339,6 +3523,8 @@
         bTrf.className = draft.type === 'transfer' ? 'active' : '';
         const isTrf = draft.type === 'transfer';
         catField.style.display = isTrf ? 'none' : '';
+        // Only expenses draw on the budget, so only they can be held back from it
+        budgetField.style.display = draft.type === 'expense' ? '' : 'none';
         noteField.querySelector('label').textContent = isTrf ? 'Note (optional)' : 'Note';
         acctLabel.textContent = isTrf ? 'From account' : 'Account';
         toField.style.display = isTrf ? '' : 'none';
@@ -3479,6 +3665,8 @@
             delete draft.toAccountId;
             delete draft.needsReview;     // manually edited = reviewed
           }
+          // Income and transfers never touch the budget, so the flag is meaningless
+          if (draft.type !== 'expense') delete draft.excludeFromBudget;
           if (fx && useLocal) {
             // Store EUR as the canonical amount, keep what was actually typed
             draft.origAmount = Math.round(val * 100) / 100;
@@ -3505,6 +3693,41 @@
         [el('label', { text: 'Note' }), note, suggest]);
       const toField = el('div', { class: 'field', style: 'display:none' },
         [el('label', { text: 'To account' }), toChips]);
+
+      /* Counts toward the daily budget. Reflects the rules when the user hasn't
+         spoken, so a charge caught by a category or keyword shows as already out;
+         switching it back on records an explicit `false` rather than deleting the
+         flag, which would just let the same rule catch it again. */
+      const budgetToggle = el('input', { type: 'checkbox' });
+      const budgetHint = el('div', { class: 'note-suggest' });
+      const syncBudgetToggle = () => {
+        const reason = budgetSkipReason(draft);
+        budgetToggle.checked = !reason;
+        budgetHint.textContent = !reason ? ''
+          : reason === 'category' ? 'This category is set to stay out of the daily budget.'
+          : reason === 'keyword' ? 'A keyword in the note keeps this out of the daily budget.'
+          : 'Kept out of the daily budget — it still counts everywhere else.';
+      };
+      budgetToggle.addEventListener('change', () => {
+        if (budgetToggle.checked) {
+          const copy = Object.assign({}, draft); delete copy.excludeFromBudget;
+          // Only pin an explicit "count it" when a rule would otherwise exclude it
+          if (budgetSkipReason(copy)) draft.excludeFromBudget = false;
+          else delete draft.excludeFromBudget;
+        } else {
+          draft.excludeFromBudget = true;
+        }
+        syncBudgetToggle();
+      });
+      note.addEventListener('input', syncBudgetToggle);
+      const budgetField = el('div', { class: 'field' }, [
+        el('label', { class: 'switch-row', style: 'display:flex' }, [
+          el('span', { class: 's-main', text: 'Counts toward the daily budget' }),
+          budgetToggle
+        ]),
+        budgetHint
+      ]);
+      syncBudgetToggle();
 
       // One-tap repeat: your most frequent recent charges, added instantly (undoable)
       if (!existing) {
@@ -3547,6 +3770,7 @@
         toField,
         catField,
         noteField,
+        budgetField,
         save
       );
       syncSeg();   // apply per-type field visibility now that fields exist
@@ -3775,7 +3999,13 @@
           el('div', { class: 'spacer' }),
           el('button', { class: 'btn block', text: 'Category limits' +
             (Object.keys(catBudgets()).length ? ' (' + Object.keys(catBudgets()).length + ')' : ''),
-            onclick: openCategoryBudgetsSheet })
+            onclick: openCategoryBudgetsSheet }),
+          el('div', { class: 'spacer' }),
+          el('button', { class: 'btn block', text: 'Not daily spending' +
+            (budgetSkipCfg().categories.length + budgetSkipCfg().keywords.length
+              ? ' (' + (budgetSkipCfg().categories.length + budgetSkipCfg().keywords.length) + ')'
+              : ''),
+            onclick: openBudgetSkipSheet })
         );
       }));
 
@@ -4859,10 +5089,23 @@
       transactions: DB.state.transactions,
       rules: DB.state.rules,
       presets: DB.state.presets,
+      /* Everything the user configured, and nothing about *this device*.
+         `lastBackup`, `changesSinceBackup`, `backupSnoozeUntil` and `installedAt`
+         are local bookkeeping: carrying them over would tell a restored device it
+         had just backed up. Everything else here is work the user did by hand and
+         would otherwise be silently lost on a restore or a device transfer. */
       meta: {
         budget: m.budget || null,
         backupReminder: m.backupReminder || null,
-        bankAccountMap: m.bankAccountMap || null
+        bankAccountMap: m.bankAccountMap || null,
+        budgetSkip: m.budgetSkip || null,
+        categoryBudgets: m.categoryBudgets || null,
+        trips: m.trips || null,
+        tripSettings: m.tripSettings || null,
+        subscriptions: m.subscriptions || null,
+        blocks: m.blocks || null,
+        withdrawalSettings: m.withdrawalSettings || null,
+        privacy: m.privacy || null
       }
     };
   }
@@ -5254,7 +5497,12 @@
         externalId: t.externalId, date: t.date, amount: t.amount, type: t.type,
         categoryId: catRemap.get(t.categoryId) || t.categoryId,
         accountId: acctRemap.get(t.accountId) || t.accountId,
-        note: t.note || '', needsReview: t.needsReview
+        toAccountId: acctRemap.get(t.toAccountId) || t.toAccountId,
+        note: t.note || '', needsReview: t.needsReview,
+        excludeFromBudget: t.excludeFromBudget,
+        // Rebuilt field by field, so anything omitted here is dropped on merge:
+        // without these a merged trip loses the amounts as they were actually paid.
+        origAmount: t.origAmount, origCurrency: t.origCurrency, rate: t.rate
       });
       if (t.externalId) byExt.add(t.externalId);
       dupKeys.add(key); added++;
@@ -5264,6 +5512,24 @@
     // Bring settings only where this device has none, remapping account references.
     const m = data.meta || {};
     if (m.budget && !DB.state.meta.budget) await DB.setMeta('budget', m.budget);
+    // Settings that name categories have to travel through the same id remap the
+    // transactions did, or they end up pointing at categories that don't exist here.
+    if (m.categoryBudgets && !DB.state.meta.categoryBudgets) {
+      const next = {};
+      for (const [catId, limit] of Object.entries(m.categoryBudgets)) {
+        next[catRemap.get(catId) || catId] = limit;
+      }
+      await DB.setMeta('categoryBudgets', next);
+    }
+    if (m.budgetSkip && !DB.state.meta.budgetSkip) {
+      await DB.setMeta('budgetSkip', {
+        categories: (m.budgetSkip.categories || []).map((id) => catRemap.get(id) || id),
+        keywords: m.budgetSkip.keywords || []
+      });
+    }
+    for (const k of ['trips', 'tripSettings', 'subscriptions', 'blocks', 'withdrawalSettings']) {
+      if (m[k] && !DB.state.meta[k]) await DB.setMeta(k, m[k]);
+    }
     if (m.bankAccountMap) {
       const map = Object.assign({}, DB.state.meta.bankAccountMap || {});
       for (const [uuid, acctId] of Object.entries(m.bankAccountMap)) {

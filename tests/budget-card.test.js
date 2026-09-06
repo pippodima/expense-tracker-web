@@ -49,7 +49,11 @@ const texts = (n, out = []) => {
 };
 const ctx = vm.createContext({ console, Math, Number, String, Object, U, el,
   fmtEUR: U.fmtEUR, meter: () => el('div', { class: 'meter' }),
-  openBudgetSheet: () => {} });
+  openBudgetSheet: () => {},
+  /* The card offers to exclude one-off spikes; this suite is about the daily
+     figures, so the detector is stubbed empty and gets its own tests below. */
+  budgetOutliers: () => [], DB: { category: () => null, put: async () => {} },
+  bumpChanges: async () => {}, render: () => {}, toast: () => {} });
 vm.runInContext(extract('budgetCard') + '\nglobalThis.__c = budgetCard;', ctx);
 
 let fails = 0;

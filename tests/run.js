@@ -44,7 +44,8 @@ const GUARDED = ['renderDashboard', 'budgetCard', 'budgetStatus', 'tripBudgetSta
   'statsCalendar', 'statsMerchants', 'statsTrips', 'openTxSheet', 'openTripDetail',
   'openCategoryDetail', 'renderTransactions', 'renderAccounts', 'renderSettings',
   'tripCharts', 'renderBlocks', 'openArrangeSheet', 'makeSortable', 'blockSequence', 'refreshToday', 'exportJSON', 'exportEncrypted', 'importJSON', 'repairData',
-  'openMappingSheet', 'openImportPreview', 'planImportCategories'];
+  'openMappingSheet', 'openImportPreview', 'planImportCategories',
+  'openBudgetSkipSheet', 'budgetSkipReason', 'budgetOutliers'];
 /* Not guardable here: a function whose body holds regex literals (catEmojiFor) trips
    the checker, which strips strings but not regexes and so reads `a|b` alternations as
    identifiers. import-categories.test.js covers that one directly instead. */

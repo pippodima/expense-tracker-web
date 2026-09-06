@@ -537,6 +537,20 @@ h2 { font-size: 1.05rem; }
 .budget-tomorrow .tom-hint.pos { color: var(--good); }
 .budget-tomorrow .tom-hint.neg { color: var(--bad); }
 
+/* One-off spike offered for exclusion from the daily allowance */
+.budget-outlier {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: 10px;
+}
+.budget-outlier .bo-title { font-size: 0.9rem; font-weight: 700; }
+.budget-outlier .bo-sub { font-size: 0.76rem; line-height: 1.4; margin-top: 2px; }
+.budget-outlier .bo-actions {
+  display: flex; gap: 8px; margin-top: 10px;
+}
+.budget-outlier .bo-actions .btn { flex: 1; }
+
 /* Top-spending compact bars (Home) — tappable rows */
 .catbar {
   display: flex;
