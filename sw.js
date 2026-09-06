@@ -1,6 +1,6 @@
 /* Service worker: network-first for our own files (so updates always reach the
    device when online), cache fallback so the app still works fully offline. */
-const CACHE = 'expense-tracker-v39';
+const CACHE = 'expense-tracker-v40';
 const ASSETS = [
   './',
   './index.html',
@@ -36,9 +36,13 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (url.origin !== location.origin) return; // don't touch cross-origin
 
-  // Network-first: fetch fresh, update the cache, fall back to cache when offline.
+  /* Network-first: fetch fresh, update the cache, fall back to cache when offline.
+     `cache: 'reload'` matters more than it looks — without it this fetch is still
+     served by the browser's own HTTP cache, and a host sending `max-age=600` (GitHub
+     Pages does) can hand back yesterday's app.js while we believe we went to the
+     network. That made a shipped feature invisible on an installed copy. */
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: 'reload' })
       .then((res) => {
         if (res && res.ok) {
           const copy = res.clone();

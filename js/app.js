@@ -4150,10 +4150,21 @@
       }));
     }));
 
-    root.append(el('p', {
+    /* Which build is actually running. Without this there is no way to tell a missing
+       feature from a stale cached copy — the question that costs the most time. The
+       name comes from the service worker's own cache, so it reflects what is really
+       installed rather than what this file claims. */
+    const foot = el('p', {
       class: 'muted', style: 'text-align:center;padding:8px 0 20px',
       text: 'Expense Tracker · offline PWA · data stays on your device'
-    }));
+    });
+    root.append(foot);
+    if (window.caches && caches.keys) {
+      caches.keys().then((keys) => {
+        const mine = keys.filter((k) => k.startsWith('expense-tracker-v')).sort();
+        if (mine.length) foot.textContent += ' · ' + mine[mine.length - 1].replace('expense-tracker-', '');
+      }).catch(() => {});
+    }
   }
 
   function openCategorySheet(existing) {
@@ -6005,8 +6016,21 @@
     if ('serviceWorker' in navigator &&
         (location.protocol === 'https:' || location.hostname === 'localhost' ||
          location.hostname === '127.0.0.1')) {
-      navigator.serviceWorker.register('./sw.js').catch((e) =>
-        console.warn('SW registration failed:', e));
+      navigator.serviceWorker.register('./sw.js').then((reg) => {
+        /* An installed PWA can stay resident for days, so registration alone never
+           notices a new release. Re-check whenever the app comes back to the front;
+           when a new worker takes over, reload once so the running page isn't half
+           old code and half new. */
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') reg.update().catch(() => {});
+        });
+        let reloading = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (reloading) return;
+          reloading = true;
+          location.reload();
+        });
+      }).catch((e) => console.warn('SW registration failed:', e));
     }
   }
 

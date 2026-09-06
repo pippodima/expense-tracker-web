@@ -64,7 +64,7 @@ const GLOBALS = new Set(['window', 'document', 'navigator', 'location', 'history
   'Math', 'Date', 'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Map', 'Set',
   'Promise', 'Error', 'RegExp', 'Intl', 'URL', 'URLSearchParams', 'Blob', 'File', 'FileReader',
   'crypto', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'isFinite', 'isNaN',
-  'parseInt', 'parseFloat', 'requestAnimationFrame', 'indexedDB', 'localStorage', 'alert',
+  'parseInt', 'parseFloat', 'requestAnimationFrame', 'indexedDB', 'localStorage', 'caches', 'alert',
   'prompt', 'confirm', 'TextEncoder', 'TextDecoder', 'Uint8Array', 'ArrayBuffer', 'btoa', 'atob',
   'DB', 'U', 'CSV', 'Charts', 'Detect', 'undefined', 'null', 'true', 'false', 'this', 'arguments', 'globalThis', 'Infinity', 'NaN']);
 const KEYWORDS = new Set(['function', 'return', 'if', 'else', 'for', 'while', 'do', 'switch',

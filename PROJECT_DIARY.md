@@ -997,3 +997,33 @@ With this file shape the description is empty, so two genuinely different transa
 same amount on the same day look identical and the second is skipped. Widening the key to
 include the category would help but not settle it, and it would have to change
 `existingDupKeys()` in step — a deliberate decision for its own chapter.
+
+### Chapter 39 — The update that never arrived (2026-09-06)
+Reported right after Chapter 38 shipped: *"I still don't see a category column selector."*
+The feature was on `main`, deployed, and verified end-to-end in a browser. So the bug wasn't
+the feature — it was that a shipped release doesn't necessarily reach an installed copy.
+
+Root cause, found by reading the deployed response headers rather than guessing:
+GitHub Pages serves `js/app.js` with **`cache-control: max-age=600`**. The service worker
+calls itself "network-first", but a plain `fetch(request)` inside a worker is still served by
+the **browser's own HTTP cache**. So the worker faithfully went to "the network", got a
+ten-minute-old file back, and cached *that* as the fresh copy. Belief and behaviour diverged,
+silently, with no way to notice.
+
+Shipped:
+- `fetch(e.request, { cache: 'reload' })` in the worker: bypasses the HTTP cache for the
+  request while still updating it. Network-first now actually means the network.
+- **Update checks while running.** An installed PWA can stay resident for days, so
+  `register()` alone never notices a new release. `reg.update()` now runs whenever the app
+  returns to the foreground, and a `controllerchange` triggers exactly one reload — otherwise
+  a running page would be half old code and half new.
+- **The build is now visible.** Settings' footer reads `… · v40`, taken from the service
+  worker's *own* cache name, so it reports what is genuinely installed rather than what the
+  file it's printed from claims. Without this there is no way to tell a missing feature from a
+  stale copy, which is the question that cost the most time here.
+- `caches` joined the scope-check's known globals — it had never been used before, so the
+  checker flagged `renderSettings` on the first run. Working as designed.
+
+The lesson worth keeping: *verified in a browser* and *reaching the user's device* are two
+different claims, and only the first was tested. A version string in the UI is the cheapest
+possible instrument for telling them apart.
