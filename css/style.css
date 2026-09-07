@@ -1113,6 +1113,19 @@ h2 { font-size: 1.05rem; }
   border: 3px solid transparent;
 }
 .swatch.active { border-color: var(--ink); }
+/* Icon picker: the free-text box reaches the device's own emoji keyboard, the
+   grid below is just shortcuts */
+.emoji-pick { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.field input.emoji-input {
+  width: 64px; height: 64px; flex: 0 0 auto;
+  min-height: 0; padding: 0;
+  text-align: center;
+  font-size: 2rem; line-height: 1;
+  border: 2px solid var(--accent);
+  border-radius: 14px;
+}
+.emoji-hint { font-size: 0.76rem; line-height: 1.45; }
+
 .emoji-grid { display: flex; flex-wrap: wrap; gap: 6px; }
 .emoji-grid button {
   width: 42px; height: 42px;

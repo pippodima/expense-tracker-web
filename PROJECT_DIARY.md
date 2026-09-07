@@ -1127,3 +1127,33 @@ Two more scope-check limitations written down: destructured parameters read as u
 identifiers (makeSwipeable), joining the regex-literal case. 19 new checks between
 `budget-exclusions` regressions and a 16-assertion browser run over the picker, the filter
 sheet, the pills, the rim and the calendar.
+
+### Chapter 42 — Any emoji, not just our 28 (2026-09-07)
+Asked: why is the category icon limited to a fixed set? Fair question, and the honest answer is
+that there was never a technical reason. There is no web API to *open* an emoji keyboard, so
+the original picker sidestepped the keyboard entirely with a tap-only grid — and a convenience
+quietly became a ceiling. But a plain text input already reaches the keyboard: on iOS every
+keyboard carries the emoji key. So the grid keeps its job as shortcuts, and an input lifts the
+lid.
+
+`emojiPicker(current, quick, onChange)` — one helper, used by **both** the category sheet and
+the trip sheet, which had the same problem with an even smaller set of eight.
+
+The interesting part is splitting the input. An emoji is rarely one character: 👨‍👩‍👧‍👦 is four
+codepoints joined by ZWJ, 👍🏽 carries a skin-tone modifier, 🇮🇹 is two regional indicators, ❤️
+ends in a variation selector, #️⃣ is a keycap sequence. `value[0]` or `slice(0, 1)` shreds every
+one of them. So `graphemes()` uses **`Intl.Segmenter`** with grapheme granularity, and
+`lastGrapheme()` takes the newest cluster — which is what makes tapping a second emoji *replace*
+the first while the keyboard stays open for browsing.
+
+A hand-written regex covers engines without `Intl.Segmenter` (Safari before 14.1). Writing the
+test for it was worth it immediately: the first version handled families, flags, skin tones and
+variation selectors but **shredded keycaps**, because `#` isn't `Extended_Pictographic` and fell
+through to the catch-all. The fallback now matches keycaps first. The same test also pushed the
+invisible ZWJ and VS16 literals in that pattern out into `‍` / `️` escapes — they were
+unreadable in source.
+
+`tests/emoji-picker.test.js` runs every case twice, once with `Intl.Segmenter` and once with it
+stubbed away, so the fallback is held to the same standard as the real thing: 30 checks. Plus a
+browser pass confirming a family, a flag, a skin tone, a keycap and a plain 🦄 all survive being
+typed, saved and read back, that the shortcuts still work, and that trips got the same field.
