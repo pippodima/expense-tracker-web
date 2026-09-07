@@ -249,6 +249,13 @@ h2 { font-size: 1.05rem; }
   font-weight: 600;
 }
 .chip .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+/* The gateway to the full searchable catalogue */
+.chip.chip-more { border: 1px dashed var(--hairline); background: transparent; color: var(--accent); font-weight: 600; }
+.filter-pills { margin-bottom: 10px; }
+.switch-row .s-sub { font-size: 0.75rem; color: var(--muted); }
+/* Swipe action layers are painted only mid-gesture; at rest their edge used to
+   bleed through the rounded corners as a faint rim on every row */
+.swipe-wrap:not(.swiping) .swipe-action { visibility: hidden; }
 
 /* ============ Amount input ============ */
 .amount-wrap {
@@ -774,6 +781,7 @@ h2 { font-size: 1.05rem; }
   min-height: 52px;
 }
 .cat-cell:active { opacity: 0.7; }
+.cat-cell.selected { box-shadow: inset 0 0 0 2px var(--accent); }
 .cat-cell-icon {
   width: 30px; height: 30px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;

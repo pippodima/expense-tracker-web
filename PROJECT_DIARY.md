@@ -1084,3 +1084,46 @@ matter most, *rent is never flagged* and *a small unusual charge is*, plus insuf
 history, the six-month window, and not re-asking once answered. Verified end-to-end in a
 browser as well: the Home prompt, the live recount after answering, the keyword rule, the
 Settings sheet, and the add sheet's switch flipping itself as a keyword is typed.
+
+### Chapter 41 — UI review on a branch: the picker, the filters, and three bugs (2026-09-07)
+Brief: a UI/UX pass on a new branch (`ui-refresh`), keeping every feature and keeping `main`
+— which is live — untouched. Method: generate a 30-category, 500-transaction dataset and
+screenshot every screen headlessly, because a screenshot can't look away. Three design
+decisions were put to the user with mockups; all three recommendations approved.
+
+**The category picker.** With 30 categories the old picker was a single horizontal strip
+showing two and a half chips — finding "Parrucchiere" meant scrolling blind. Now: the ~8 most
+likely categories (recent picks first, then frequency) as *wrapped* chips, the current
+selection always kept visible wherever it ranks, and an "All 30 ›" chip opening a searchable
+grid sheet (`openCategoryPickSheet`, matching through `catKey` so accents and case don't
+matter). Under ~9 categories nothing changes — the chips simply all fit. The colour dot left
+the chips too: every category already carries an emoji, and two identity marks per chip is one
+more than needed.
+
+**Activity filters.** Search + three dropdowns + two date fields — three rows of controls
+before the first transaction. Now one row: search plus a `Filter · n` button, everything else
+in a sheet. The state is never hidden though: each active filter is a pill with its own ✕,
+and Reset clears the lot. Nothing was removed; every control moved intact.
+
+**Three bugs found by the tour:**
+- **The outlier prompt flagged rent every month.** With rent inside "Bills" next to 10-60 €
+  utilities the category median is small, so 680 € read as "9× your usual" — and each month's
+  rent is a fresh transaction, so it would never stop asking. Chapter 40's tests missed it
+  because they gave rent its own category. Fix: an amount the category has already seen twice
+  (±5%) is a standing charge, not an anomaly — and confirmed subscriptions are skipped
+  outright. The €450 one-off in the same category still fires.
+- **Calendar drew two month navigators.** Its own ‹ › under the header's — both driving the
+  same `ui.stats.y/m0`. The inner one now appears only when the period selector is on
+  Year/All/Custom, where the calendar genuinely needs its own month.
+- **Every row wore a faint red rim.** The swipe-action layers sit behind each row at all
+  times, and their edge bled through the rounded corners. They're now painted only
+  mid-gesture, removed after the close animation rather than before it so the colour doesn't
+  vanish while the row is still sliding back.
+
+Also: repeat chips fall back to the category name when the note is empty (they rendered
+blank for description-less users), and `.switch-row` sub-labels got their muted style.
+
+Two more scope-check limitations written down: destructured parameters read as undeclared
+identifiers (makeSwipeable), joining the regex-literal case. 19 new checks between
+`budget-exclusions` regressions and a 16-assertion browser run over the picker, the filter
+sheet, the pills, the rim and the calendar.

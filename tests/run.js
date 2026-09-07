@@ -45,10 +45,12 @@ const GUARDED = ['renderDashboard', 'budgetCard', 'budgetStatus', 'tripBudgetSta
   'openCategoryDetail', 'renderTransactions', 'renderAccounts', 'renderSettings',
   'tripCharts', 'renderBlocks', 'openArrangeSheet', 'makeSortable', 'blockSequence', 'refreshToday', 'exportJSON', 'exportEncrypted', 'importJSON', 'repairData',
   'openMappingSheet', 'openImportPreview', 'planImportCategories',
-  'openBudgetSkipSheet', 'budgetSkipReason', 'budgetOutliers'];
-/* Not guardable here: a function whose body holds regex literals (catEmojiFor) trips
-   the checker, which strips strings but not regexes and so reads `a|b` alternations as
-   identifiers. import-categories.test.js covers that one directly instead. */
+  'openBudgetSkipSheet', 'budgetSkipReason', 'budgetOutliers',
+  'openCategoryPickSheet'];
+/* Not guardable here: regex literals (catEmojiFor) read as identifiers because the
+   checker strips strings but not regexes, and destructured parameters (makeSwipeable's
+   { onTap, onEdit, onDelete }) aren't seen as declarations. Those get covered by
+   their own tests instead. */
 if (!run([path.join(__dirname, 'scope-check.js'), ...GUARDED], 'scope')) failed++;
 
 for (const f of fs.readdirSync(__dirname).filter((n) => n.endsWith('.test.js')).sort()) {

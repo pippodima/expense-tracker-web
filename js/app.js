@@ -550,12 +550,20 @@
 
     const out = [];
     for (const t of candidates) {
+      if (isProtectedRecurring(t)) continue;              // a confirmed subscription
       const past = history.get(t.categoryId);
       if (!past || past.length < MIN_HISTORY) continue;   // no basis to judge
       const typical = median(past);
       if (!(typical > 0)) continue;
       const ratio = t.amount / typical;
       if (ratio < FACTOR) continue;
+      /* An amount this category has already seen twice is a standing charge, not an
+         anomaly. Without this, rent filed under "Bills" reads as "9× your usual"
+         every single month — the utilities drag the median down, and each month's
+         rent is a fresh transaction, so the prompt would never stop. */
+      const near = past.filter((a) =>
+        Math.abs(a - t.amount) <= Math.max(1, t.amount * 0.05)).length;
+      if (near >= 2) continue;
       out.push({ tx: t, typical, ratio });
     }
     return out.sort((a, b) => b.tx.amount - a.tx.amount).slice(0, 3);
@@ -2272,14 +2280,18 @@
     const bud = DB.state.meta.budget;
     const dailyBase = bud && bud.amount ? bud.amount / D : 0;
 
-    // Month navigation (calendar is inherently monthly)
-    const nav = el('div', { class: 'month-nav' });
-    const prev = el('button', { class: 'mn-btn', text: '‹' });
-    const next = el('button', { class: 'mn-btn', text: '›' });
-    prev.addEventListener('click', () => { statsShiftMonth(-1); });
-    next.addEventListener('click', () => { statsShiftMonth(1); });
-    nav.append(prev, el('div', { class: 'mn-label', text: U.monthLabel(y, m0) }), next);
-    root.append(nav);
+    /* The calendar is inherently monthly, but when the period selector is already
+       showing a month, its ‹ › drive the very same y/m0 — a second identical nav
+       right underneath was pure duplication. Only Year/All/Custom need one here. */
+    if (ui.stats.range !== 'month') {
+      const nav = el('div', { class: 'month-nav' });
+      const prev = el('button', { class: 'mn-btn', text: '‹' });
+      const next = el('button', { class: 'mn-btn', text: '›' });
+      prev.addEventListener('click', () => { statsShiftMonth(-1); });
+      next.addEventListener('click', () => { statsShiftMonth(1); });
+      nav.append(prev, el('div', { class: 'mn-label', text: U.monthLabel(y, m0) }), next);
+      root.append(nav);
+    }
 
     const card = el('div', { class: 'card' }, [
       el('div', { class: 'card-head' }, [
@@ -3286,42 +3298,106 @@
       el('button', { class: 'btn small', text: 'Export CSV', onclick: () => exportCSV(list) })
     ]));
 
+    /* One row — search plus a Filter button — instead of three rows of controls
+       before the first transaction. What's filtered is never hidden though: every
+       active filter shows as a pill with its own ×. */
     const search = el('input', {
       class: 'searchbox', type: 'search', placeholder: 'Search note, category, account…',
-      value: ui.tx.q
+      value: ui.tx.q, style: 'flex:1;margin-bottom:0'
     });
     let debounce;
     search.addEventListener('input', () => {
       clearTimeout(debounce);
       debounce = setTimeout(() => { ui.tx.q = search.value; ui.tx.limit = 100; refreshList(); }, 150);
     });
-    root.append(search);
 
-    const selAcct = el('select', {}, [el('option', { value: '', text: 'All accounts' })]);
-    DB.state.accounts.forEach((a) =>
-      selAcct.append(el('option', { value: a.id, text: a.name })));
-    selAcct.value = ui.tx.accountId;
-    const selCat = el('select', {}, [el('option', { value: '', text: 'All categories' })]);
-    DB.state.categories.forEach((c) =>
-      selCat.append(el('option', { value: c.id, text: c.icon + ' ' + c.name })));
-    selCat.value = ui.tx.categoryId;
-    const selSort = el('select', {}, [
-      el('option', { value: 'date-desc', text: 'Newest first' }),
-      el('option', { value: 'date-asc', text: 'Oldest first' }),
-      el('option', { value: 'amount-desc', text: 'Amount ↓' }),
-      el('option', { value: 'amount-asc', text: 'Amount ↑' })
-    ]);
-    selSort.value = ui.tx.sort;
-    const from = el('input', { type: 'date', value: ui.tx.from });
-    const to = el('input', { type: 'date', value: ui.tx.to });
-    [['accountId', selAcct], ['categoryId', selCat], ['sort', selSort],
-     ['from', from], ['to', to]].forEach(([key, ctl]) => {
-      ctl.addEventListener('change', () => { ui.tx[key] = ctl.value; ui.tx.limit = 100; refreshList(); });
-    });
-    root.append(
-      el('div', { class: 'filterbar' }, [selAcct, selCat, selSort]),
-      el('div', { class: 'filterbar' }, [from, to])
-    );
+    const activeFilters = () => {
+      const out = [];
+      if (ui.tx.accountId) {
+        const a = DB.account(ui.tx.accountId);
+        out.push({ key: 'accountId', label: a ? a.name : 'Account' });
+      }
+      if (ui.tx.categoryId) {
+        const c = DB.category(ui.tx.categoryId);
+        out.push({ key: 'categoryId', label: c ? c.icon + ' ' + c.name : 'Category' });
+      }
+      if (ui.tx.from || ui.tx.to) {
+        const f = ui.tx.from ? U.fmtDate(ui.tx.from, { day: 'numeric', month: 'short' }) : '…';
+        const t = ui.tx.to ? U.fmtDate(ui.tx.to, { day: 'numeric', month: 'short' }) : '…';
+        out.push({ key: 'dates', label: f + ' – ' + t });
+      }
+      if (ui.tx.sort !== 'date-desc') {
+        out.push({ key: 'sort', label: { 'date-asc': 'Oldest first',
+          'amount-desc': 'Amount ↓', 'amount-asc': 'Amount ↑' }[ui.tx.sort] || ui.tx.sort });
+      }
+      return out;
+    };
+
+    const filterBtn = el('button', { class: 'btn small', onclick: openTxFilterSheet });
+    const pillRow = el('div', { class: 'chips wrap filter-pills' });
+    const drawFilterState = () => {
+      const act = activeFilters();
+      filterBtn.textContent = act.length ? 'Filter · ' + act.length : 'Filter';
+      filterBtn.classList.toggle('primary', act.length > 0);
+      pillRow.innerHTML = '';
+      pillRow.hidden = act.length === 0;
+      act.forEach((f) => pillRow.append(el('button', {
+        class: 'chip active', text: f.label + '  ✕',
+        onclick: () => {
+          if (f.key === 'dates') { ui.tx.from = ''; ui.tx.to = ''; }
+          else if (f.key === 'sort') ui.tx.sort = 'date-desc';
+          else ui.tx[f.key] = '';
+          ui.tx.limit = 100;
+          drawFilterState(); refreshList();
+        }
+      })));
+    };
+    root.append(el('div', { class: 'filterbar' }, [search, filterBtn]), pillRow);
+    drawFilterState();
+
+    function openTxFilterSheet() {
+      openSheet('Filter', (body, api) => {
+        const selAcct = el('select', {}, [el('option', { value: '', text: 'All accounts' })]);
+        DB.state.accounts.forEach((a) =>
+          selAcct.append(el('option', { value: a.id, text: a.name })));
+        selAcct.value = ui.tx.accountId;
+        const selCat = el('select', {}, [el('option', { value: '', text: 'All categories' })]);
+        DB.state.categories.forEach((c) =>
+          selCat.append(el('option', { value: c.id, text: c.icon + ' ' + c.name })));
+        selCat.value = ui.tx.categoryId;
+        const selSort = el('select', {}, [
+          el('option', { value: 'date-desc', text: 'Newest first' }),
+          el('option', { value: 'date-asc', text: 'Oldest first' }),
+          el('option', { value: 'amount-desc', text: 'Amount ↓' }),
+          el('option', { value: 'amount-asc', text: 'Amount ↑' })
+        ]);
+        selSort.value = ui.tx.sort;
+        const from = el('input', { type: 'date', value: ui.tx.from });
+        const to = el('input', { type: 'date', value: ui.tx.to });
+        [['accountId', selAcct], ['categoryId', selCat], ['sort', selSort],
+         ['from', from], ['to', to]].forEach(([key, ctl]) => {
+          ctl.addEventListener('change', () => {
+            ui.tx[key] = ctl.value; ui.tx.limit = 100;
+            drawFilterState(); refreshList();
+          });
+        });
+        body.append(
+          el('div', { class: 'field' }, [el('label', { text: 'Account' }), selAcct]),
+          el('div', { class: 'field' }, [el('label', { text: 'Category' }), selCat]),
+          el('div', { class: 'field' }, [el('label', { text: 'Order' }), selSort]),
+          el('div', { class: 'field-row' }, [
+            el('div', { class: 'field' }, [el('label', { text: 'From' }), from]),
+            el('div', { class: 'field' }, [el('label', { text: 'To' }), to])
+          ]),
+          el('button', { class: 'btn block', text: 'Reset all', onclick: () => {
+            Object.assign(ui.tx, { accountId: '', categoryId: '', from: '', to: '',
+              sort: 'date-desc', limit: 100 });
+            api.close(); drawFilterState(); refreshList();
+          } }),
+          el('button', { class: 'btn block primary', text: 'Done', onclick: api.close })
+        );
+      });
+    }
 
     const listWrap = el('div', { id: 'txlist' });
     root.append(listWrap);
@@ -3422,6 +3498,13 @@
       row.style.transform = `translateX(${x}px)`;
       wrap.classList.toggle('dir-right', x > 0);
       wrap.classList.toggle('dir-left', x < 0);
+      /* The colored action layers live behind the row at all times, and their edge
+         bled through the rounded corners as a faint rim on every row at rest. Only
+         paint them mid-gesture — removed after the close animation, not before it,
+         or the color vanishes while the row is still sliding back. */
+      if (x !== 0) wrap.classList.add('swiping');
+      else if (anim) setTimeout(() => { if (!openX) wrap.classList.remove('swiping'); }, 220);
+      else wrap.classList.remove('swiping');
     };
     function reset() { openX = 0; setX(0, true); if (closeOpenSwipe === reset) closeOpenSwipe = null; }
 
@@ -3478,6 +3561,37 @@
       .sort((a, b) => (counts.get(b.id) || 0) - (counts.get(a.id) || 0));
     const head = recent.map((id) => DB.state.categories.find((c) => c.id === id)).filter(Boolean);
     return [...head, ...rest];
+  }
+
+  /** The full catalogue, searchable — for whoever outgrew the chips.
+      Matching runs through catKey, so accents and case don't matter. */
+  function openCategoryPickSheet(currentId, onPick) {
+    openSheet('Pick a category', (body, api) => {
+      const input = el('input', { class: 'searchbox', type: 'search',
+        placeholder: 'Search categories…', autocomplete: 'off' });
+      const grid = el('div', { class: 'cat-grid' });
+      const none = el('p', { class: 'muted', text: 'No category matches' });
+      const draw = () => {
+        grid.innerHTML = '';
+        const q = catKey(input.value);
+        orderedCategories()
+          .filter((c) => !q || catKey(c.name).includes(q))
+          .forEach((c) => grid.append(el('button', {
+            class: 'cat-cell' + (c.id === currentId ? ' selected' : ''),
+            onclick: () => { api.close(); onPick(c); }
+          }, [
+            el('span', { class: 'cat-cell-icon', text: c.icon,
+              style: 'background:' + U.tintOf(c.color) }),
+            el('span', { class: 'cat-cell-main' }, [
+              el('span', { class: 'cat-cell-name', text: c.name })
+            ])
+          ])));
+        none.hidden = grid.children.length > 0;
+      };
+      input.addEventListener('input', draw);
+      body.append(el('div', { class: 'field' }, [input]), grid, none);
+      draw();
+    }, { tall: true });
   }
 
   async function rememberCategoryPick(catId) {
@@ -3614,18 +3728,36 @@
       };
 
       // Category chips — recently picked first, then most used
-      const catChips = el('div', { class: 'chips scroll' });
+      /* With a handful of categories every chip fits; with thirty, a scrolling strip
+         means hunting blind. So: the ~8 most likely (recent picks first, then
+         frequency) as wrapped chips, and "All N" opens a searchable grid. The chip
+         for the current selection is always present, wherever it ranks. */
+      const catChips = el('div', { class: 'chips wrap' });
+      const pickCat = (id) => {
+        draft.categoryId = id; manualCat = true; suggest.textContent = ''; drawCats();
+      };
       const drawCats = () => {
         catChips.innerHTML = '';
-        orderedCategories().forEach((c) => {
+        const all = orderedCategories();
+        const MAX = 8;
+        let show = all.slice(0, MAX);
+        if (draft.categoryId && !show.some((c) => c.id === draft.categoryId)) {
+          const cur = all.find((c) => c.id === draft.categoryId);
+          if (cur) show = [cur, ...show.slice(0, MAX - 1)];
+        }
+        show.forEach((c) => {
           catChips.append(el('button', {
             class: 'chip' + (draft.categoryId === c.id ? ' active' : ''),
-            onclick: () => { draft.categoryId = c.id; manualCat = true; suggest.textContent = ''; drawCats(); }
-          }, [
-            el('span', { class: 'dot', style: 'background:' + U.colorOf(c.color) }),
-            el('span', { text: c.icon + ' ' + c.name })
-          ]));
+            text: c.icon + ' ' + c.name,
+            onclick: () => pickCat(c.id)
+          }));
         });
+        if (all.length > MAX) {
+          catChips.append(el('button', {
+            class: 'chip chip-more', text: 'All ' + all.length + ' ›',
+            onclick: () => openCategoryPickSheet(draft.categoryId, (c) => pickCat(c.id))
+          }));
+        }
       };
       drawCats();
 
@@ -3752,7 +3884,8 @@
               render();
             } }, [
               el('span', { text: c ? c.icon : '•' }),
-              el('span', { text: (tx.note || '').slice(0, 14) }),
+              // A note-less charge still deserves a name: fall back to its category
+              el('span', { text: (tx.note || (c ? c.name : '')).slice(0, 14) }),
               el('span', { class: 'repeat-amt', text: fmtEUR(tx.amount) }),
               el('span', { class: 'repeat-count', text: '×' + count })
             ]));

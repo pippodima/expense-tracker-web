@@ -170,5 +170,28 @@ console.log('\nthe anomaly detector (relative, not absolute):');
       .budgetOutliers().length === 0);
 }
 
+console.log('\nrecurring charges are not anomalies:');
+{
+  /* Rent 680 filed under Bills next to small utilities: the category median is tiny,
+     so the naive ratio flags rent every month. It repeats at the same amount, so it
+     must never be offered. */
+  const hist = [];
+  for (let m = 3; m <= 8; m++) {
+    const mm = String(m).padStart(2, '0');
+    hist.push(tx({ date: `2026-${mm}-01`, amount: 680, categoryId: 'Bills' }));
+    hist.push(tx({ date: `2026-${mm}-08`, amount: 9.99, categoryId: 'Bills' }));
+    hist.push(tx({ date: `2026-${mm}-14`, amount: 62, categoryId: 'Bills' }));
+  }
+  const rent = tx({ date: '2026-09-01', amount: 680, categoryId: 'Bills' });
+  ok('rent inside a mixed Bills category is not flagged',
+    world({ txs: [...hist, rent] }).budgetOutliers().length === 0);
+  const repair = tx({ date: '2026-09-05', amount: 450, categoryId: 'Bills' });
+  ok('but a genuine one-off in the same category still is',
+    world({ txs: [...hist, repair] }).budgetOutliers().length === 1);
+  ok('a small drift in the recurring amount still counts as recurring',
+    world({ txs: [...hist, tx({ date: '2026-09-01', amount: 699, categoryId: 'Bills' })] })
+      .budgetOutliers().length === 0);
+}
+
 console.log('\n' + (fails ? fails + ' FAILED' : 'all checks passed'));
 process.exit(fails ? 1 : 0);
