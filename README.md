@@ -160,6 +160,7 @@ It now launches full-screen and works offline. There is nothing to build or conf
 | [`tests/`](tests/) | Zero-dependency Node test suite |
 | [`tools/`](tools/) | Demo-data generator and the screenshot capture script — dev only |
 | [`PROJECT_DIARY.md`](PROJECT_DIARY.md) | The full story: every chapter, decision and bug, in order |
+| [`IDEAS.md`](IDEAS.md) | The other half: what might be built, what's still open, what was rejected and why |
 
 There is no framework and no global state library. `DB.state` is the source of truth, mirrored
 to IndexedDB; a small `ui` object in `app.js` holds view and filter state. Data records —
