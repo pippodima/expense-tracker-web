@@ -1087,11 +1087,18 @@ h2 { font-size: 1.05rem; }
 
 /* Getting-started checklist: teaches by doing, retires itself when done */
 .setup-step {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 6px;
   width: 100%; text-align: left;
   padding: 10px 4px;
   border-bottom: 1px solid var(--hairline);
 }
+/* The row is the action; Skip sits beside it as a separate answer */
+.setup-go-btn {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 10px;
+  text-align: left;
+}
+.setup-skip { flex: 0 0 auto; color: var(--muted); }
 .setup-step:last-of-type { border-bottom: none; }
 .setup-tick {
   width: 22px; height: 22px; flex: 0 0 auto;

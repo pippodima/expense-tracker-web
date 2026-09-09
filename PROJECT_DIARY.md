@@ -1199,3 +1199,40 @@ re-applying the six edits. Nothing was lost.
 Worth keeping: the committed state is the source of truth, "not found" en masse means the file
 is wrong rather than the code, and a test suite that runs in a second is what makes that
 distinction cheap enough to notice at all.
+
+### Chapter 44 — The checklist that would never leave (2026-09-09)
+Asked, one day after Chapter 43 shipped: *what if someone has no bank CSV, or doesn't want a
+monthly budget — does the tutorial stay forever?* Reproduced rather than reasoned about, and the
+answer was yes. A simulated user with **200 transactions, backed up, a year into the app**, who
+simply never wanted a budget and never had a file to import, still saw:
+
+```
+2 of 4 left · everything here stays on your phone
+  ○ Set a monthly budget
+  ○ Import your bank history
+```
+
+`setupCard()` only retired when *all four* steps were done, so it nagged indefinitely about two
+features the person had deliberately declined. The ✕ was the only exit, and being all-or-nothing
+it also threw away the steps that still mattered — someone who hadn't backed up but didn't want
+a budget had to choose between a permanent nag and losing the backup reminder.
+
+The mistake was treating four items as equally mandatory. Two are things everyone must do —
+**add a transaction**, **save a backup** — and two are optional *features*, not setup steps.
+
+- Steps are now marked `essential`, and **only essentials keep the card open**. Once you can use
+  the app and your data is safe, the card's job is finished; budget and import ride along as
+  suggestions but never hold it there, and they keep living in "How it works".
+- Optional steps gained **Skip** — "not for me" is a real answer, stored in
+  `meta.tutorial.skipped`, and the step then stops appearing. Essentials deliberately have no
+  Skip: losing everything because backups looked optional is not a mistake worth enabling.
+- The footer counts **essential** steps ("One more essential step"), not everything outstanding,
+  so it never overstates what's actually being asked.
+
+Fifteen browser assertions over the whole matrix: fresh install, transactions-but-no-backup,
+backup-but-no-transactions, the exact reported case, skipping one, skipping both, and outright
+dismissal.
+
+The lesson is about defaults, not code: an onboarding checklist quietly assumes every item is
+something the user *should* do. Two of these were things they *could* do — and a checklist that
+can't take no for an answer stops being help and becomes nagging.
