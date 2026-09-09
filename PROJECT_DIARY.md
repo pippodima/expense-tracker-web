@@ -1157,3 +1157,45 @@ unreadable in source.
 stubbed away, so the fallback is held to the same standard as the real thing: 30 checks. Plus a
 browser pass confirming a family, a flag, a skin tone, a keycap and a plain 🦄 all survive being
 typed, saved and read back, that the shortcuts still work, and that trips got the same field.
+
+### Chapter 43 — Teaching the app, and a file that ate itself (2026-09-09)
+Two things: an ideas file, and onboarding. Plus a scare worth recording.
+
+**`IDEAS.md`.** The diary says what shipped; this is the other half — what might. Flagship
+candidates (payday forecast, sinking funds, merchant price watch) each noting *what already
+exists in the code* so the cost is honest rather than guessed, the smaller wins, every gap left
+open across recent work, and the rejected paths with their reasons. Receipt photos are the
+interesting rejection: trivial to build, but they'd turn the backup from a file you can read and
+diff into megabytes of base64 nobody will ever inspect. The backup being legible *is* the
+durability story.
+
+**Onboarding, measured first.** A fresh install seeds 11 categories, 2 accounts and 11 rules —
+and **zero transactions, no budget**. So Home reads `0,00 €` three times under a donut emoji,
+and nothing hints that importing, swiping, trips or private mode exist. There was no onboarding
+code anywhere in `app.js`. Three pieces, all approved with mockups first:
+
+- **A "Getting started" checklist on Home.** Four steps: first expense, budget, import, backup.
+  It **derives its ticks from the data**, never from a stored "step 2 complete" flag — so it
+  cannot disagree with reality, and it can't get stuck if someone does things out of order or
+  imports before it ever renders. It retires itself when the last step is done, and ✕ hides it
+  for good. Only `everImported` needed a flag, since "did an import happen" isn't visible in the
+  data; it's set at both import paths.
+- **"How it works" in Settings, first section.** Eight topics — the daily allowance, spending
+  that shouldn't count, gestures, trips, importing, private mode, your data, quick-add. The
+  reference a first-run flow can't be: still there in six months when someone wonders what a
+  trip budget actually does.
+- **The swipe hint, once.** Swipe is the app's main shortcut and completely invisible. The first
+  time anyone sees a transaction list, the top row slides open to reveal Edit and closes again,
+  with a one-line caption. It has to add `.swiping` while it runs, because Chapter 41 hid those
+  layers at rest.
+
+**The scare.** Partway through, `js/app.js` in the working tree lost **525 lines** — including
+`openBudgetSkipSheet`, `emojiPicker` and `budgetOutliers`, all committed chapters. The editor
+had the file open and saved a stale buffer over it. It was caught because the scope check
+suddenly reported *21* functions "not found", which is not a plausible code error — the shape of
+the failure was the clue. `git show HEAD:js/app.js` was intact, so recovery was a checkout plus
+re-applying the six edits. Nothing was lost.
+
+Worth keeping: the committed state is the source of truth, "not found" en masse means the file
+is wrong rather than the code, and a test suite that runs in a second is what makes that
+distinction cheap enough to notice at all.

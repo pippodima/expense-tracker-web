@@ -80,6 +80,99 @@
   const EMOJI = ['🛒', '🍕', '🍽️', '☕', '🚌', '🚗', '⛽', '🛍️', '👕', '💡', '🏠', '📱', '💊', '❤️',
     '🎬', '🎮', '📚', '✈️', '🏖️', '🎁', '💰', '💼', '📈', '🐾', '👶', '🎓', '🔧', '📦'];
 
+  /* ======================= Getting started =======================
+     A fresh install seeds categories and accounts but no transactions and no
+     budget, so Home reads 0,00 € three times and nothing hints that importing,
+     trips or the daily allowance exist. The checklist teaches by doing rather than
+     by explaining: it derives its ticks from the data itself, so it can't disagree
+     with reality, and it removes itself once there's nothing left to say. */
+
+  const tutorialCfg = () =>
+    Object.assign({ hidden: false, swipeShown: false }, DB.state.meta.tutorial || {});
+
+  function setupSteps() {
+    const m = DB.state.meta;
+    return [
+      { key: 'tx', done: DB.state.transactions.length > 0,
+        title: 'Add your first expense',
+        hint: 'Tap + anywhere. The note field suggests a category as you type.',
+        go: () => openTxSheet(null) },
+      { key: 'budget', done: !!(m.budget && m.budget.amount),
+        title: 'Set a monthly budget',
+        hint: 'Spread per day and it rebalances itself as you spend.',
+        go: openBudgetSheet },
+      { key: 'import', done: !!m.everImported,
+        title: 'Import your bank history',
+        hint: 'A CSV or JSON export \u2014 columns are detected for you.',
+        go: openCsvWizard },
+      { key: 'backup', done: !!m.lastBackup,
+        title: 'Save a backup',
+        hint: 'Your data lives only on this phone. A backup is the safety net.',
+        go: exportJSON }
+    ];
+  }
+
+  /** The checklist card, or null when it has nothing left to teach. */
+  function setupCard() {
+    if (tutorialCfg().hidden) return null;
+    const steps = setupSteps();
+    const left = steps.filter((s) => !s.done);
+    if (!left.length) return null;              // finished: it retires itself
+
+    const card = el('div', { class: 'card setup-card' }, [
+      el('div', { class: 'card-head' }, [
+        el('h2', { text: 'Getting started' }),
+        el('button', { class: 'btn small ghost', text: '\u2715', 'aria-label': 'Dismiss',
+          onclick: async () => {
+            await DB.setMeta('tutorial', Object.assign(tutorialCfg(), { hidden: true }));
+            render();
+          } })
+      ])
+    ]);
+    steps.forEach((s) => {
+      card.append(el('button', {
+        class: 'setup-step' + (s.done ? ' done' : ''),
+        onclick: s.done ? null : s.go
+      }, [
+        el('span', { class: 'setup-tick', text: s.done ? '\u2713' : '' }),
+        el('span', { class: 'setup-main' }, [
+          el('span', { class: 'setup-title', text: s.title }),
+          s.done ? null : el('span', { class: 'setup-hint', text: s.hint })
+        ]),
+        s.done ? null : el('span', { class: 'setup-go', text: '\u203a' })
+      ]));
+    });
+    card.append(el('div', { class: 'setup-foot muted', text:
+      left.length + ' of ' + steps.length + ' left \u00b7 everything here stays on your phone' }));
+    return card;
+  }
+
+  /* Swipe is the app's main shortcut and completely invisible until discovered.
+     Nudge the first row once \u2014 with the action layer temporarily painted, since it
+     is hidden at rest \u2014 then never again. */
+  function maybeShowSwipeHint(wrap) {
+    if (!wrap || tutorialCfg().swipeShown) return;
+    DB.setMeta('tutorial', Object.assign(tutorialCfg(), { swipeShown: true }));
+    const row = wrap.querySelector('.tx-row');
+    if (!row) return;
+    const caption = el('div', { class: 'swipe-hint muted',
+      text: 'Tip: swipe a row right to edit, left to delete.' });
+    wrap.parentNode.insertBefore(caption, wrap.nextSibling);
+    setTimeout(() => {
+      wrap.classList.add('dir-right', 'swiping');
+      row.style.transition = 'transform .45s ease';
+      row.style.transform = 'translateX(76px)';
+      setTimeout(() => {
+        row.style.transform = 'translateX(0)';
+        setTimeout(() => {
+          wrap.classList.remove('dir-right', 'swiping');
+          row.style.transition = '';
+        }, 500);
+      }, 850);
+    }, 600);
+    setTimeout(() => caption.remove(), 9000);
+  }
+
   /* ---- Icon picking ----
      An emoji is rarely one character: 👨‍👩‍👧‍👦 is four joined by ZWJ, 👍🏽 carries a skin-tone
      modifier, 🇮🇹 is two regional indicators, ❤️ has a variation selector. Slicing by
@@ -1053,6 +1146,10 @@
         el('button', { class: 'btn small primary', text: 'Review', onclick: openReviewSheet })
       ]));
     }
+
+    // Getting started — above the month nav, since it's about the app, not a month
+    const setup = setupCard();
+    if (setup) root.append(setup);
 
     // Month / range navigation
     const nav = el('div', { class: 'month-nav' });
@@ -3490,6 +3587,8 @@
       }
       wrap.append(txRow(t));
     });
+    // First time anyone sees a list, show what a row can do
+    maybeShowSwipeHint(wrap.querySelector('.swipe-wrap'));
     if (list.length > shown.length) {
       wrap.append(el('button', {
         class: 'btn block', text: `Show more (${list.length - shown.length} left)`,
@@ -4173,6 +4272,66 @@
     const bud = DB.state.meta.budget;
     const last = DB.state.meta.lastBackup;
     const reviewN = reviewQueue().length;
+
+    /* ---------- How it works ----------
+       The reference a first-run flow can't be: still here in six months when
+       someone wonders what a trip budget actually does. First, so it's findable. */
+    root.append(settingsSection('help', '\u2753', 'How it works',
+      'Budgets, trips, gestures, privacy', (b) => {
+        const topic = (title, lines) => {
+          b.append(el('h3', { class: 'help-h', text: title }));
+          lines.forEach((t) => b.append(el('p', { class: 'help-p muted', text: t })));
+        };
+        topic('The daily allowance', [
+          'A monthly budget can be spread per day. Whatever is left is shared across the ' +
+          'days still to come, so underspending today raises tomorrow and overspending ' +
+          'lowers it. The big number on Home is what is left for today.',
+          'Set one under Monthly budget. "Monthly cap" is the simpler alternative: one flat ' +
+          'limit, no daily maths.'
+        ]);
+        topic('Spending that should not count', [
+          'A car repair would flatten the daily figure for weeks, so it can be left out of ' +
+          'the allowance while still counting in your balance, Net and every stat. Toggle it ' +
+          'on the transaction itself, or set whole categories and note keywords under ' +
+          'Monthly budget \u2192 Not daily spending.',
+          'When one charge is far bigger than that category usually sees, Home offers to ' +
+          'leave it out for you.'
+        ]);
+        topic('Gestures', [
+          'Swipe a transaction right to edit, left to delete \u2014 a short swipe reveals the ' +
+          'action, a long one fires it. Deletes can be undone from the toast.',
+          'Any bottom sheet can be dragged downwards to dismiss, not just closed by button.'
+        ]);
+        topic('Trips', [
+          'A trip is a named date range. Give it a budget and its spending comes out of that ' +
+          'pot instead of your monthly one, with its own daily allowance while you are away.',
+          'A trip can carry a foreign currency and a rate you enter yourself: prices are typed ' +
+          'in the local currency and shown back in it, while euro stays the stored amount. ' +
+          'The app makes no network calls, so it cannot fetch rates for you.'
+        ]);
+        topic('Importing', [
+          'Settings \u2192 Import transactions takes a CSV or JSON export from almost any bank ' +
+          'or money app. Columns are detected from their names and their contents, so unnamed ' +
+          'or unusual files usually still work \u2014 you confirm before anything is added.',
+          'If the file has its own category column, matching names are reused and the rest can ' +
+          'be created in one step. Re-importing the same file is safe: duplicates are skipped.'
+        ]);
+        topic('Private mode', [
+          'The eye in the Home header blurs your balances, or every amount if you set level 2 ' +
+          'in Settings. Tap a blurred figure to peek at it for a few seconds.',
+          'This hides numbers from someone glancing at your screen. It is not encryption.'
+        ]);
+        topic('Your data', [
+          'Everything is stored on this phone and the app never makes a network request. Data ' +
+          'leaves only as a file you export yourself.',
+          'That also means nobody else has a copy. iOS can clear website storage, so export a ' +
+          'JSON backup now and then \u2014 the app will remind you.'
+        ]);
+        topic('Adding from the Home Screen', [
+          'Settings \u2192 Home / Lock Screen quick-add explains how to place a button that ' +
+          'opens the app straight into a new transaction.'
+        ]);
+      }));
 
     /* ---------- Budget ---------- */
     root.append(settingsSection('budget', '💰', 'Monthly budget',
@@ -4989,6 +5148,7 @@
     }
     if (toPut.length) await DB.bulkPut('transactions', toPut);
     await bumpChanges(added + updated + merged);
+    await DB.setMeta('everImported', true);       // ticks the setup checklist
 
     // Focus the views on the imported data — otherwise Home/Stats sit on the
     // current month and look empty when the history is in other months.
@@ -6413,6 +6573,7 @@
             });
             await DB.bulkPut('transactions', good);
             await bumpChanges(good.length);
+            await DB.setMeta('everImported', true);   // ticks the setup checklist
             api.close();
             toast(good.length + ' transactions imported');
             show('transactions');
