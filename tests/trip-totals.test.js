@@ -56,7 +56,8 @@ function world(txs, confirmed) {
     'const PROCESSOR_PREFIXES = [];',
     extract('budgetSkipCfg'), extract('budgetSkipReason'),
     extract('tripForDate'), extract('isProtectedRecurring'), extract('tripExpenseOf'),
-    extract('tripTagged'), extract('tripBookedAhead'), extract('tripTotals'), extract('tripBudgetStatus'),
+    extract('countsAsTripSpending'), extract('tripTagged'),
+    extract('tripBookedAhead'), extract('tripTotals'), extract('tripBudgetStatus'),
     'function chartTotal(trip) {',
     '  ' + chartFilterSource(),
     '  return exp.reduce((s, t) => s + t.amount, 0);',
@@ -202,6 +203,32 @@ console.log('\nbooked-ahead costs (a flight bought before leaving):');
   const api = world([...base, tx({ date: '2026-05-28', amount: 90, tripId: 'tr' })]);
   ok('a trip with no id has no booked-ahead costs',
     api.tripTotals({ from: TRIP.from, to: TRIP.to }).ahead === 0);
+}
+
+console.log('\na ticket bought during the trip, kept out of its budget:');
+{
+  /* The reported case: a ticket paid on day 8 and excluded from the daily budget so
+     it wouldn't eat the allowance. It is still a real cost of the trip, and the date
+     rule no longer counts it — so it has to be added, exactly like a pre-paid one. */
+  const ticket = tx({ date: '2026-09-08', amount: 60.98, note: 'RYANAIR',
+    tripId: 'tr', excludeFromBudget: true });
+  const api = world([...base, ticket]);
+  const t = api.tripTotals(TRIP);
+  ok('it appears in the travel list', api.tripTagged(TRIP).length === 1);
+  ok('it is added to the trip total, not swallowed',
+    round(t.total) === round(600 + 60.98), t.total);
+  ok('it stays out of the trip budget',
+    round(api.tripBudgetStatus(TRIP).spent) === 600, api.tripBudgetStatus(TRIP).spent);
+  ok('and out of the charts, which follow on-trip spending',
+    round(api.chartTotal(TRIP)) === 600, api.chartTotal(TRIP));
+}
+{
+  /* Same ticket, left in the budget: the date rule counts it, so it must not be
+     added a second time. One rule, opposite outcome. */
+  const ticket = tx({ date: '2026-09-08', amount: 60.98, note: 'RYANAIR', tripId: 'tr' });
+  const api = world([...base, ticket]);
+  ok('a ticket left in the budget is counted once',
+    round(api.tripTotals(TRIP).total) === round(660.98), api.tripTotals(TRIP).total);
 }
 
 console.log('\nincome and transfers never inflate a trip:');

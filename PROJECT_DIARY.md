@@ -1387,3 +1387,43 @@ bookings around the trip, then the days themselves. The first row is the flight 
 
 Also removed a duplicated figure — the running total was printed both above the list and in the
 new bar; the bar just says "Unsaved changes" and lets the number live in one place.
+
+### Chapter 49 — Three bugs in one screenshot (2026-09-19)
+A photo of the real app on the real phone, which found what synthetic data could not.
+
+**The save bar had rows scrolling underneath it.** `position: sticky; bottom: 0` keeps an
+element pinned while the *rest of the list carries on behind it* — which is exactly what a
+sticky footer does, and exactly what looks broken: a bar floating mid-list with two more
+transactions visible below. The fix was to stop faking a footer. `openSheet` now builds a real
+`.sheet-foot` as a **sibling of the scrolling body**, and `api.setFooter(node)` fills it. The
+sheet is already a flex column, so the footer simply takes the bottom and nothing can pass it.
+
+**A ticket bought during the trip never appeared in the picker.** Chapter 48 ranked rows —
+attached, then around the trip, then during it — which reads fine until the history is real.
+With months of transactions, the whole "around the trip" group outranks the during-the-trip
+one, and the visible slice of 60 was exhausted long before a single trip day appeared. Ranking
+plus a global cap silently starves the last group. Now the list is **grouped with a limit
+each** (30, with "…and N more — search to find them"), so no group can crowd out another, and
+searching looks through everything rather than the slice.
+
+**And the real find: a ticket excluded from the daily budget could not be counted at all.** The
+user bought a flight during the trip and marked it as not counting toward the daily allowance —
+sensible, a ticket shouldn't eat your spending money. But Chapter 46 had made `budgetSkipReason`
+mean "not travel", so the trip total dropped it; and Chapter 47 only *added* out-of-range costs,
+so tagging it added nothing. It appeared in the travel list contributing to nothing.
+
+The fix replaced "is it outside the dates?" with the question actually being asked:
+
+```
+countsAsTripSpending(trip, t)  — does the date rule already count this?
+tripBookedAhead(trip)          — tagged costs it doesn't, which must be added
+```
+
+One rule now covers three cases that were heading toward three special cases: bought before
+leaving, bought during but held back from the budget, or a confirmed subscription. The bus home
+left in the budget still isn't added, because it *is* already counted. Rows say which they are —
+*"during the trip · outside its budget"* — so the arithmetic stays legible.
+
+The lesson is about test data. Every earlier suite used a tidy ten-day trip with a handful of
+expenses, and all three of these needed *volume* and a real flag combination to show up. A
+screenshot from the phone is worth a lot of synthetic fixtures.

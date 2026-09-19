@@ -273,9 +273,13 @@
       el('button', { class: 'btn small ghost', text: 'Close' })
     ]);
     const body = el('div', { class: 'sheet-body' });
+    /* A sibling of the scrolling body, not a sticky child of it: a sticky footer still
+       has the rest of the list passing underneath it, which reads as a misplaced bar
+       floating over the content. Out here nothing can scroll past it. */
+    const foot = el('div', { class: 'sheet-foot', hidden: true });
     const grip = el('div', { class: 'sheet-grip' });
     const sheet = el('div', { class: 'sheet' + (opts && opts.tall ? ' tall' : ''), style: `z-index:${z + 1}` },
-      [grip, head, body]);
+      [grip, head, body, foot]);
     document.body.append(backdrop, sheet);
     requestAnimationFrame(() => { backdrop.classList.add('show'); sheet.classList.add('show'); });
 
@@ -286,7 +290,13 @@
         sheet.classList.remove('show');
         setTimeout(() => { backdrop.remove(); sheet.remove(); }, 260);
       },
-      setTitle(t) { head.querySelector('h2').textContent = t; }
+      setTitle(t) { head.querySelector('h2').textContent = t; },
+      /** Pin a bar below the scroll area. Pass null to take it away again. */
+      setFooter(node) {
+        foot.innerHTML = '';
+        if (node) foot.append(node);
+        foot.hidden = !node;
+      }
     };
     head.querySelector('button').addEventListener('click', api.close);
     backdrop.addEventListener('click', api.close);
@@ -2896,13 +2906,22 @@
          of the trip above the bookings, and you open this screen looking for a ticket.
          So: what's already attached, then bookings around the trip, then the days
          themselves — with search for anything specific. */
-      const rank = (t) => (saved.has(t.id) ? 0 : inTrip(t.date) ? 2 : 1);
       const candidates = DB.state.transactions
-        .filter((t) => t.type === 'expense' && (!t.tripId || t.tripId === trip.id))
-        .sort((a, b) => rank(a) - rank(b) ||
-          (inTrip(a.date) && inTrip(b.date)
-            ? a.date.localeCompare(b.date)
-            : dayGap(a.date) - dayGap(b.date)));
+        .filter((t) => t.type === 'expense' && (!t.tripId || t.tripId === trip.id));
+      /* Three groups with their own limits, instead of one ranked list. Ranking alone
+         starved the during-the-trip rows: with a long history the whole of it outranks
+         them, so a ticket bought on the trip never reached the visible slice at all. */
+      const groups = [
+        { key: 'attached', title: 'Attached',
+          rows: candidates.filter((t) => saved.has(t.id))
+            .sort((a, b) => a.date.localeCompare(b.date)) },
+        { key: 'around', title: 'Around the trip',
+          rows: candidates.filter((t) => !saved.has(t.id) && !inTrip(t.date))
+            .sort((a, b) => dayGap(a.date) - dayGap(b.date)) },
+        { key: 'during', title: 'During the trip',
+          rows: candidates.filter((t) => !saved.has(t.id) && inTrip(t.date))
+            .sort((a, b) => b.date.localeCompare(a.date)) }
+      ];
 
       body.append(el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:12px', text:
         'The cost of getting there and back. Anything paid before you left is added to ' +
@@ -2914,19 +2933,32 @@
       const list = el('div');
       const count = el('div', { class: 'muted', style: 'margin:6px 0' });
 
+      const PER_GROUP = 30;
       const draw = () => {
         const q = String(search.value || '').trim().toLowerCase();
-        list.innerHTML = '';
-        const shown = candidates.filter((t) => {
+        const matches = (t) => {
           if (!q) return true;
           const c = DB.category(t.categoryId);
           return ((t.note || '') + ' ' + (c ? c.name : '') + ' ' +
             t.amount.toFixed(2).replace('.', ',')).toLowerCase().includes(q);
-        }).slice(0, 60);
-        if (!shown.length) {
-          list.append(el('p', { class: 'muted', text: 'Nothing matches.' }));
-        }
-        shown.forEach((t) => {
+        };
+        list.innerHTML = '';
+        let any = false;
+        groups.forEach((g) => {
+          const hits = g.rows.filter(matches);
+          if (!hits.length) return;
+          any = true;
+          list.append(el('div', { class: 'pick-group muted', text: g.title }));
+          // Searching looks through everything; only the resting list is trimmed
+          (q ? hits : hits.slice(0, PER_GROUP)).forEach((t) => row(t, list));
+          if (!q && hits.length > PER_GROUP) {
+            list.append(el('p', { class: 'muted', style: 'padding:4px 0', text:
+              '…and ' + (hits.length - PER_GROUP) + ' more — search to find them' }));
+          }
+        });
+        if (!any) list.append(el('p', { class: 'muted', text: 'Nothing matches.' }));
+      };
+      const row = (t, into) => {
           const c = DB.category(t.categoryId);
           const cb = el('input', { type: 'checkbox' });
           cb.checked = chosen.has(t.id);
@@ -2934,7 +2966,7 @@
             if (cb.checked) chosen.add(t.id); else chosen.delete(t.id);
             sync();
           });
-          list.append(el('label', { class: 'switch-row' }, [
+          into.append(el('label', { class: 'switch-row' }, [
             el('span', { class: 'tx-icon', text: c ? c.icon : '🎫',
               style: 'background:' + U.tintOf(c ? c.color : 'blue') }),
             el('div', { class: 's-main' }, [
@@ -2942,11 +2974,13 @@
               el('div', { class: 's-sub muted', text:
                 U.fmtDate(t.date, { day: 'numeric', month: 'short', year: 'numeric' }) +
                 ' · ' + fmtEUR(t.amount) +
-                (inTrip(t.date) ? ' · during the trip, already counted' : '') })
+                (!inTrip(t.date) ? ''
+                  : countsAsTripSpending(trip, t)
+                    ? ' · during the trip, already counted'
+                    : ' · during the trip, outside its budget') })
             ]),
             cb
           ]));
-        });
       };
       /* The list can run to dozens of rows, so a Save button after it is a long scroll
          away from the tick that needed saving. The bar sticks to the bottom of the
@@ -2963,13 +2997,14 @@
           : 'Nothing selected yet';
         const dirty = chosen.size !== saved.size ||
           [...chosen].some((id) => !saved.has(id));
-        bar.hidden = !dirty;
+        api.setFooter(dirty ? bar : null);
         barText.textContent = 'Unsaved changes';
       };
       search.addEventListener('input', draw);
-      draw(); sync();
+      draw();
 
-      body.append(el('div', { class: 'field' }, [search]), count, list, bar);
+      body.append(el('div', { class: 'field' }, [search]), count, list);
+      sync();                      // after the body exists, so the footer can attach
       Object.assign(saveBtn, { onclick: async () => {
           /* Write only what changed: attach the newly ticked, detach the unticked.
              Everything else about the transaction is left exactly as it was. */
@@ -3000,12 +3035,21 @@
       .sort((a, b) => a.date.localeCompare(b.date));
   }
 
-  /* Only the ones bought outside the dates add to the trip total — a return bus
-     bought on day 8 is already counted by the date rule, and adding it again would
-     double it. Tagging it still has a point: it belongs in the travel list with the
-     outbound flight, which is the question "what did getting there and back cost". */
+  /** Does the date rule already count this expense in the trip's spending? */
+  function countsAsTripSpending(trip, t) {
+    return t.date >= trip.from && t.date <= trip.to &&
+      !isProtectedRecurring(t) && !budgetSkipReason(t);
+  }
+
+  /* Tagged costs that the trip total doesn't already include, and so must be added.
+     Three things land here, and one rule covers all of them rather than a list of
+     special cases: bought before leaving; bought during the trip but held back from
+     the budget (a ticket you didn't want eating the daily allowance — still a real
+     cost of the trip); or a confirmed subscription. A return bus bought on day 8 and
+     left in the budget is *not* here, because the date rule already counted it and
+     adding it again would double it. */
   function tripBookedAhead(trip) {
-    return tripTagged(trip).filter((t) => t.date < trip.from || t.date > trip.to);
+    return tripTagged(trip).filter((t) => !countsAsTripSpending(trip, t));
   }
 
   function detectTrips() {
@@ -3354,8 +3398,9 @@
                 el('div', { class: 'ahead-name', text: x.note || (c ? c.name : 'Expense') }),
                 el('div', { class: 'ahead-sub muted', text:
                   U.fmtDate(x.date, { day: 'numeric', month: 'short', year: 'numeric' }) +
-                  ' · ' + (x.date >= trip.from && x.date <= trip.to
-                    ? 'during the trip' : 'booked ahead') })
+                  ' · ' + (x.date < trip.from || x.date > trip.to ? 'booked ahead'
+                    : countsAsTripSpending(trip, x) ? 'during the trip'
+                    : 'during the trip · outside its budget') })
               ]),
               // Always euro: these were paid at home, not at the trip's rate
               el('div', { class: 'ahead-amt', text: fmtEUR(x.amount) }),

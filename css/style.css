@@ -1085,22 +1085,23 @@ h2 { font-size: 1.05rem; }
 .set-row .s-sub { font-size: 0.75rem; color: var(--muted); }
 .set-row .s-chev { color: var(--muted); }
 
-/* Save bar pinned to the bottom of a scrolling sheet, so the action stays reachable
-   however long the list is */
-.savebar {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
-  display: flex; align-items: center; gap: 12px;
-  margin: 10px -16px 0;
+/* A sheet's action bar: a sibling of the scrolling body, so nothing passes under it */
+.sheet-foot {
+  flex: 0 0 auto;
   padding: 10px 16px calc(var(--safe-bottom) + 10px);
-  background: color-mix(in srgb, var(--page) 92%, transparent);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+  background: var(--surface);
   border-top: 1px solid var(--hairline);
 }
+.savebar { display: flex; align-items: center; gap: 12px; }
 .savebar-text { flex: 1; min-width: 0; font-size: 0.85rem; color: var(--ink-2); font-weight: 600; }
 .savebar .btn { flex: 0 0 auto; min-width: 104px; }
+
+/* Section headings inside a picker list */
+.pick-group {
+  font-size: 0.7rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 14px 0 4px;
+}
 
 /* Booked-ahead trip costs: paid before leaving, listed apart from the charts */
 .ahead-row {
