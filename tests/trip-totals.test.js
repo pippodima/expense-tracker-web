@@ -1,7 +1,7 @@
-/* One trip must not report three different totals.
-   The headline (tripTotals) and the charts must add up to the same money; the budget
-   meter may be lower, but only by spending deliberately held back from the budget —
-   and it has to report that gap rather than just disagreeing.
+/* One trip, one total. The headline (tripTotals), the charts and the budget meter must
+   all count the same money — a trip is a date range, so anything charged in those dates
+   that isn't travel (a subscription, or spending held back from the budget) is out of
+   all three alike.
    Runs the real tripTotals / tripBudgetStatus, plus tripCharts' own filter. */
 const fs = require('fs');
 const vm = require('vm');
@@ -91,7 +91,9 @@ console.log('\nplain trip:');
     [api.tripTotals(TRIP).spent, api.chartTotal(TRIP)]);
   ok('and so does the budget meter',
     round(api.tripBudgetStatus(TRIP).spent) === 600, api.tripBudgetStatus(TRIP).spent);
-  ok('with nothing reported as held back', api.tripBudgetStatus(TRIP).excluded === 0);
+  ok('all three are the same number',
+    round(api.tripTotals(TRIP).spent) === round(api.tripBudgetStatus(TRIP).spent),
+    [api.tripTotals(TRIP).spent, api.tripBudgetStatus(TRIP).spent]);
 }
 
 console.log('\na subscription charged mid-trip:');
@@ -108,18 +110,19 @@ console.log('\na subscription charged mid-trip:');
 
 console.log('\nan expense held back from the budget:');
 {
+  /* Excluding an expense from the budget is the only way to say "this isn't my
+     normal spending", so it means "not travel" here too — one number, everywhere. */
   const txs = [...base, tx({ date: '2026-09-06', amount: 300, note: 'RIPARAZIONE',
     excludeFromBudget: true })];
   const api = world(txs);
   const head = round(api.tripTotals(TRIP).spent);
   const chart = round(api.chartTotal(TRIP));
   const tb = api.tripBudgetStatus(TRIP);
-  ok('it still counts as money the trip cost', head === 900, head);
-  ok('the charts still add up to the headline', head === chart, [head, chart]);
-  ok('but it does not draw on the trip pot', round(tb.spent) === 600, tb.spent);
-  ok('and the gap is reported, not hidden', round(tb.excluded) === 300, tb.excluded);
-  ok('the gap exactly explains the difference',
-    round(tb.spent + tb.excluded) === head, [tb.spent, tb.excluded, head]);
+  ok('the headline leaves it out', head === 600, head);
+  ok('so do the charts', chart === 600, chart);
+  ok('and the budget meter', round(tb.spent) === 600, tb.spent);
+  ok('all three agree exactly', head === chart && chart === round(tb.spent),
+    [head, chart, tb.spent]);
 }
 
 console.log('\nboth at once (the reported case):');
@@ -131,10 +134,9 @@ console.log('\nboth at once (the reported case):');
   const head = round(api.tripTotals(TRIP).spent);
   const chart = round(api.chartTotal(TRIP));
   const tb = api.tripBudgetStatus(TRIP);
-  ok('there are two numbers on screen, not three', head === chart, [head, chart]);
-  ok('the headline excludes the subscription', head === 900, head);
-  ok('the meter is lower by exactly what it says',
-    round(tb.spent + tb.excluded) === head, [tb.spent, tb.excluded, head]);
+  ok('one number, not three', head === chart && chart === round(tb.spent),
+    [head, chart, tb.spent]);
+  ok('and it is the ordinary travel spending only', head === 600, head);
 }
 
 console.log('\nincome and transfers never inflate a trip:');

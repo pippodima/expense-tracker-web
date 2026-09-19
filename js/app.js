@@ -2847,13 +2847,16 @@
   const trips = () => (DB.state.meta.trips || []).slice()
     .sort((a, b) => b.from.localeCompare(a.from));
 
-  /* What the trip cost. A confirmed subscription that happens to be charged while you
-     are away is normal life, not travel — the charts and the budget meter have always
-     left those out, and this didn't, so the same trip reported a headline that no other
-     figure on the screen agreed with. One definition, used everywhere. */
+  /* What the trip cost — one definition, used by every figure on the trip sheet.
+     A trip is a *date range*, so it sweeps up whatever happened to be charged while you
+     were away. Two kinds of spending are therefore not travel: a confirmed subscription
+     billed mid-trip, and anything you deliberately held back from the budget — the only
+     way to say "this isn't my normal spending". Both are left out here, in the charts
+     and in the budget meter alike, so the sheet never shows two totals for one trip. */
   function tripTotals(trip) {
     const txs = DB.state.transactions.filter(
-      (t) => t.date >= trip.from && t.date <= trip.to && !isProtectedRecurring(t));
+      (t) => t.date >= trip.from && t.date <= trip.to &&
+        !isProtectedRecurring(t) && !budgetSkipReason(t));
     const spent = txs.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
     const days = Math.round((new Date(trip.to) - new Date(trip.from)) / 86400000) + 1;
     return { txs, spent, days, perDay: days ? spent / days : 0 };
@@ -3142,13 +3145,10 @@
               text: fmtTripMoney(trip, tb.spent) + ' / ' + fmtTripMoney(trip, tb.budget) })
           ]),
           meter(tb.spent, tb.budget),
-          el('div', { class: 'muted', style: 'margin-top:6px', text: (tb.over
+          el('div', { class: 'muted', style: 'margin-top:6px', text: tb.over
             ? fmtTripBoth(trip, -tb.remaining) + ' over'
             : fmtTripBoth(trip, tb.remaining) + ' left' + (tb.active && tb.daysLeft
-                ? ' · ' + fmtTripMoney(trip, tb.todayAllowance) + ' for today' : '')) +
-            // Say why this figure is lower than the trip's own total
-            (tb.excluded > 0
-              ? ' · ' + fmtTripMoney(trip, tb.excluded) + ' not counted in the budget' : '') })
+                ? ' · ' + fmtTripMoney(trip, tb.todayAllowance) + ' for today' : '') })
         ]));
       }
       body.append(el('button', { class: 'btn block ghost', style: 'margin-bottom:12px',
@@ -3182,20 +3182,26 @@
      is a budget — whether the pace is going to hold. Everything is drawn in the
      trip's own currency, since that's what you were reading off price tags. */
   function tripCharts(body, trip) {
-    /* Same expense set as the trip's headline total, so the charts add up to it.
-       The budget meter is deliberately narrower — it also drops anything held back
-       from the budget — and says so on its own line. */
+    // Exactly the set tripTotals counts, so the charts add up to the headline
     const exp = DB.state.transactions.filter(
       (t) => t.type === 'expense' && t.date >= trip.from && t.date <= trip.to &&
-        !isProtectedRecurring(t));
+        !isProtectedRecurring(t) && !budgetSkipReason(t));
     if (!exp.length) {
       body.append(el('div', { class: 'empty', html:
         '<span class="big">🧳</span>No spending recorded on this trip yet' }));
       return;
     }
-    const skipped = DB.state.transactions.filter(
-      (t) => t.type === 'expense' && t.date >= trip.from && t.date <= trip.to &&
-        isProtectedRecurring(t)).reduce((s, t) => s + t.amount, 0);
+    /* Spending inside the dates that isn't travel. Reported below rather than simply
+       vanishing — the trip total is narrower than "everything charged that week", and
+       the difference should be visible somewhere. */
+    const inDates = DB.state.transactions.filter(
+      (t) => t.type === 'expense' && t.date >= trip.from && t.date <= trip.to);
+    const skippedSubs = inDates.filter(isProtectedRecurring)
+      .reduce((s, t) => s + t.amount, 0);
+    const skippedBudget = inDates.filter(
+      (t) => !isProtectedRecurring(t) && budgetSkipReason(t))
+      .reduce((s, t) => s + t.amount, 0);
+    const skipped = skippedSubs + skippedBudget;
 
     const fx = tripHasFx(trip);
     const loc = (eur) => (fx ? eur / trip.rate : eur);
@@ -3322,8 +3328,11 @@
 
     if (skipped > 0) {
       body.append(el('p', { class: 'muted', style: 'margin-top:10px;line-height:1.5', text:
-        'These charts leave out ' + fmtEUR(skipped) + ' of confirmed subscriptions charged ' +
-        'during the trip — they count as normal monthly spending, not travel.' }));
+        'Not counted as travel: ' +
+        [skippedSubs > 0 ? fmtEUR(skippedSubs) + ' of confirmed subscriptions' : null,
+         skippedBudget > 0 ? fmtEUR(skippedBudget) + ' you kept out of the budget' : null]
+          .filter(Boolean).join(' and ') +
+        ', charged during these dates but part of normal life rather than the trip.' }));
     }
   }
 

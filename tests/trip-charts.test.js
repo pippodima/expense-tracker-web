@@ -81,7 +81,10 @@ function build({ today, trip, txs, confirmed }) {
     openDayDetail: (iso) => opened.push('day:' + iso),
     openCategoryDetail: (c, r) => opened.push('cat:' + (c ? c.name : '?') + ':' + r.from),
     isProtectedRecurring: (t) => !!(t.note &&
-      (DB.state.meta.subscriptions.confirmed || {})[String(t.note).toUpperCase().split(/\s+/)[0]])
+      (DB.state.meta.subscriptions.confirmed || {})[String(t.note).toUpperCase().split(/\s+/)[0]]),
+    // The charts count what the trip counts, and that now also drops anything the
+    // user held back from the budget. This suite is about drawing, not that rule.
+    budgetSkipReason: (t) => (t.excludeFromBudget === true ? 'once' : null)
   });
   vm.runInContext(extract('tripCharts') + '\nglobalThis.__draw = tripCharts;', ctx);
   const body = node('div');
@@ -162,7 +165,8 @@ console.log('finished trip in Turkey (1 € = 38 TL), 400 € budget, 8 days:');
     opened.some((o) => /^cat:.*:2026-07-04$/.test(o)), opened.join(','));
 
   ok('subscription is excluded and explained',
-    /leave out 9,99/.test(t.replace(/\s+/g, ' ')), t.slice(-220));
+    /Not counted as travel: 9,99 € of confirmed subscriptions/
+      .test(t.replace(/\s+/g, ' ').replace(/[\u00a0\u202f]/g, ' ')), t.slice(-220));
 
   const pace = t.split(' | ').find((s) => /ahead of|behind/.test(s));
   console.log('   pace verdict: ' + pace);

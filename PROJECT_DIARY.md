@@ -1285,3 +1285,31 @@ budget-excluded expense, both together, and a trip containing income and transfe
 `tripCharts`' filter **out of the source** rather than duplicating it, so the two can't drift
 apart again without the test noticing. Run against the previous commit it fails seven ways,
 which is the only real evidence that a regression test guards anything.
+
+### Chapter 46 — One number, and the user was right (2026-09-19)
+Follow-up to Chapter 45, same day. I had settled on *two* numbers with a stated reason: the
+headline counted money held back from the budget (it is still money spent), the budget meter
+did not, and the meter explained the gap. The user pushed back: *if a user chose to exclude an
+expense from the daily budget, why is that expense shown in the trip's expenses?*
+
+They're right, and the argument is better than mine. **A trip is a date range**, so it sweeps
+up whatever happened to be charged while you were away — a car repair at home, an annual
+insurance bill. `excludeFromBudget` is currently the only way a user can say *"this isn't my
+normal spending"*, so reading it as *"not travel either"* matches what they meant. And my
+version was internally inconsistent: confirmed subscriptions were already excluded from
+**every** trip figure, and this is the same kind of flag treated differently.
+
+So `tripTotals`, `tripCharts` and `tripBudgetStatus` now share one filter, and a trip shows
+exactly one total. The meter's "not counted in the budget" line is gone — nothing differs any
+more, so there is nothing to explain there.
+
+What stayed is the principle from Chapter 40: **excluded is not hidden.** The note under the
+charts now covers both reasons and names both amounts — *"Not counted as travel: 12,99 € of
+confirmed subscriptions and 300,00 € you kept out of the budget"* — so the trip total being
+narrower than "everything charged that week" is visible, not silent.
+
+Two suites needed the new dependency: `trip-charts` had to stub `budgetSkipReason` (its subject
+is drawing, not the rule) and its assertion pinned the old wording of that note. Worth noting
+which kind of failure each was — one was a real missing dependency, the other was a test
+asserting a sentence rather than a behaviour. The second kind is the one to write more
+carefully.
