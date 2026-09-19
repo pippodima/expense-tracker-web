@@ -56,7 +56,7 @@ function world(txs, confirmed) {
     'const PROCESSOR_PREFIXES = [];',
     extract('budgetSkipCfg'), extract('budgetSkipReason'),
     extract('tripForDate'), extract('isProtectedRecurring'), extract('tripExpenseOf'),
-    extract('tripTotals'), extract('tripBudgetStatus'),
+    extract('tripBookedAhead'), extract('tripTotals'), extract('tripBudgetStatus'),
     'function chartTotal(trip) {',
     '  ' + chartFilterSource(),
     '  return exp.reduce((s, t) => s + t.amount, 0);',
@@ -137,6 +137,54 @@ console.log('\nboth at once (the reported case):');
   ok('one number, not three', head === chart && chart === round(tb.spent),
     [head, chart, tb.spent]);
   ok('and it is the ordinary travel spending only', head === 600, head);
+}
+
+console.log('\nbooked-ahead costs (a flight bought before leaving):');
+{
+  /* Paid in May, five weeks before the trip. It must count toward what the trip cost
+     and nothing else — the money already left in May. */
+  const flight = tx({ date: '2026-05-28', amount: 214.6, note: 'PEGASUS AIRLINES',
+    tripId: 'tr' });
+  const api = world([...base, flight]);
+  const t = api.tripTotals(TRIP);
+  ok('it is found even though its date is outside the trip',
+    t.aheadTxs.length === 1, t.aheadTxs.length);
+  ok('and added to the trip total', round(t.total) === round(600 + 214.6), t.total);
+  ok('while on-trip spending is unchanged', round(t.spent) === 600, t.spent);
+  ok('it never touches the trip budget',
+    round(api.tripBudgetStatus(TRIP).spent) === 600, api.tripBudgetStatus(TRIP).spent);
+  ok('nor the charts, which only cover the days you were there',
+    round(api.chartTotal(TRIP)) === 600, api.chartTotal(TRIP));
+  ok('and per-day stays the daily rate you actually spent',
+    round(t.perDay) === 60, t.perDay);
+}
+{
+  /* Tagging something already inside the dates must not count it twice. */
+  const inside = tx({ date: '2026-09-04', amount: 80, note: 'MUSEO', tripId: 'tr' });
+  const api = world([...base, inside]);
+  const t = api.tripTotals(TRIP);
+  ok('a tagged expense inside the dates is not double counted',
+    round(t.total) === 680 && t.aheadTxs.length === 0, [t.total, t.aheadTxs.length]);
+}
+{
+  /* Another trip's flight must not leak in. */
+  const other = tx({ date: '2026-05-28', amount: 500, note: 'ALTRO VOLO',
+    tripId: 'different-trip' });
+  const api = world([...base, other]);
+  ok('a flight tagged to another trip is ignored',
+    round(api.tripTotals(TRIP).total) === 600, api.tripTotals(TRIP).total);
+}
+{
+  /* An untagged expense before the trip stays out — dates alone never pull it in. */
+  const api = world([...base, tx({ date: '2026-05-28', amount: 214.6, note: 'PEGASUS' })]);
+  ok('nothing is attached without being tagged',
+    round(api.tripTotals(TRIP).total) === 600, api.tripTotals(TRIP).total);
+}
+{
+  /* A draft trip in the editor has no id yet. */
+  const api = world([...base, tx({ date: '2026-05-28', amount: 90, tripId: 'tr' })]);
+  ok('a trip with no id has no booked-ahead costs',
+    api.tripTotals({ from: TRIP.from, to: TRIP.to }).ahead === 0);
 }
 
 console.log('\nincome and transfers never inflate a trip:');

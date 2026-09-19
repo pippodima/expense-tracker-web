@@ -1085,6 +1085,21 @@ h2 { font-size: 1.05rem; }
 .set-row .s-sub { font-size: 0.75rem; color: var(--muted); }
 .set-row .s-chev { color: var(--muted); }
 
+/* Booked-ahead trip costs: paid before leaving, listed apart from the charts */
+.ahead-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.ahead-row:last-of-type { border-bottom: none; }
+.ahead-main { flex: 1; min-width: 0; }
+.ahead-name {
+  font-size: 0.88rem; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ahead-sub { font-size: 0.74rem; }
+.ahead-amt { font-weight: 700; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+
 /* Getting-started checklist: teaches by doing, retires itself when done */
 .setup-step {
   display: flex; align-items: center; gap: 6px;

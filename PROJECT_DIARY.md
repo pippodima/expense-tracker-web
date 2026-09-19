@@ -1313,3 +1313,43 @@ is drawing, not the rule) and its assertion pinned the old wording of that note.
 which kind of failure each was — one was a real missing dependency, the other was a test
 asserting a sentence rather than a behaviour. The second kind is the one to write more
 carefully.
+
+### Chapter 47 — The flight you bought in July (2026-09-19)
+A trip has always been *a date range*, which is why it both missed the flight bought five weeks
+early and swept in the car repair that happened at home while you were away. The user proposed
+the fix themselves: an **Add** button in the trip recap that searches earlier transactions,
+attaches several at once, counts them toward what the trip cost — and leaves the money exactly
+where it was spent. *"If I buy a ticket in August, the money spent is in August."* That is more
+honest than moving money between months, which is what most budgeting apps do.
+
+Shipped as `tripId` on the transaction (not a list of ids on the trip: deleting a transaction
+then cleans up by itself, one trip per transaction is enforced, and it generalises later to
+"this is *not* a trip expense"). Three questions went to the user with mockups; all three
+recommendations approved — any pre-paid cost rather than only tickets, the headline showing the
+full cost with a breakdown, and the trips list agreeing with it.
+
+Rules, each chosen for a reason:
+- **Only out-of-range tags become "booked ahead".** Inside the dates the date rule already
+  counts them; honouring the tag as well would count them twice.
+- **Per day stays the days you were there.** 394,60 € of flights would otherwise add 39 €/day
+  to a ten-day trip that actually ran at 60 €/day.
+- **The charts ignore them.** A flight bought in July has no day inside the trip to be drawn on,
+  and folding it into the donut would stop the charts adding up to the days you were there —
+  the exact confusion Chapters 45 and 46 had just finished removing.
+- **Nothing about the month changes.** No `countsInBudget` or `countsInStats` edit: the hotel
+  keeps its August date, its August budget and its August stats. The tag is for trip reporting
+  only.
+- **Booked-ahead costs always display in euro.** On a lira trip, `fmtTripMoney` would divide a
+  €120 flight by the trip rate and render "4.562 TRY", which is nonsense — it was paid in euro
+  at home. So when a foreign-currency trip has booked-ahead costs the headline switches to euro
+  as well, since local currency and euro cannot be added; without any, nothing changes.
+- **`tripId` went into the backup merge field list** immediately. That path rebuilds each
+  transaction field by field, and it has now silently dropped data twice — `origAmount` and
+  `toAccountId` in Chapter 40. A new field on a transaction is not done until it is in that list.
+
+`tests/trip-totals.test.js` grows to 27 checks: the flight found despite its date, the total
+rising while on-trip spending, the budget meter, the charts and per-day all stay put, a tagged
+expense inside the dates not double counted, another trip's flight ignored, an untagged earlier
+expense staying out, and a draft trip with no id. A 17-assertion browser pass covers the attach
+sheet, the ordering by nearness to the trip, the running selection total, the split headline,
+the list and grand total agreeing, and removal.

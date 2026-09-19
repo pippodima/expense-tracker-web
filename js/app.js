@@ -2859,7 +2859,122 @@
         !isProtectedRecurring(t) && !budgetSkipReason(t));
     const spent = txs.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
     const days = Math.round((new Date(trip.to) - new Date(trip.from)) / 86400000) + 1;
-    return { txs, spent, days, perDay: days ? spent / days : 0 };
+    const aheadTxs = tripBookedAhead(trip);
+    const ahead = aheadTxs.reduce((s, t) => s + t.amount, 0);
+    return {
+      txs, spent, days,
+      // Per day means the days you were there, so a flight bought in May can't
+      // inflate it — 120 € of tickets would otherwise add 12 €/day to a 10-day trip.
+      perDay: days ? spent / days : 0,
+      aheadTxs, ahead, total: spent + ahead
+    };
+  }
+
+  /* Expenses attached to a trip by hand — a flight, a hotel deposit, insurance —
+     bought before you left, so no date rule could ever find them. They count toward
+     what the trip cost, and deliberately nothing else: the money left in May, so it
+     stays in May's budget and May's stats exactly where it already was.
+     Only out-of-range ones are "booked ahead"; inside the dates the date rule already
+     counts them, and honouring the tag too would count them twice. */
+  /** Pick past expenses to attach to a trip. Candidates are expenses outside the trip
+      dates and not already claimed by another trip; the ones near the trip come first,
+      since a flight is usually bought within a few months of leaving. */
+  function openTripAttachSheet(trip, onDone) {
+    openSheet('Add booked-ahead costs', (body, api) => {
+      const chosen = new Set(tripBookedAhead(trip).map((t) => t.id));
+      const dayGap = (iso) => {
+        const d = new Date(iso + 'T12:00:00');
+        if (iso < trip.from) return (new Date(trip.from + 'T12:00:00') - d) / 86400000;
+        return (d - new Date(trip.to + 'T12:00:00')) / 86400000;
+      };
+      const candidates = DB.state.transactions
+        .filter((t) => t.type === 'expense' && (t.date < trip.from || t.date > trip.to) &&
+          (!t.tripId || t.tripId === trip.id))
+        .sort((a, b) => dayGap(a.date) - dayGap(b.date));
+
+      body.append(el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:12px', text:
+        'These count toward what the trip cost. They stay in the month you paid them, ' +
+        'and they don\'t draw on the trip budget.' }));
+
+      const search = el('input', { class: 'searchbox', type: 'search',
+        placeholder: 'Search by note, category or amount…', autocomplete: 'off' });
+      const list = el('div');
+      const count = el('div', { class: 'muted', style: 'margin:6px 0' });
+
+      const draw = () => {
+        const q = String(search.value || '').trim().toLowerCase();
+        list.innerHTML = '';
+        const shown = candidates.filter((t) => {
+          if (!q) return true;
+          const c = DB.category(t.categoryId);
+          return ((t.note || '') + ' ' + (c ? c.name : '') + ' ' +
+            t.amount.toFixed(2).replace('.', ',')).toLowerCase().includes(q);
+        }).slice(0, 60);
+        if (!shown.length) {
+          list.append(el('p', { class: 'muted', text: 'Nothing matches.' }));
+        }
+        shown.forEach((t) => {
+          const c = DB.category(t.categoryId);
+          const cb = el('input', { type: 'checkbox' });
+          cb.checked = chosen.has(t.id);
+          cb.addEventListener('change', () => {
+            if (cb.checked) chosen.add(t.id); else chosen.delete(t.id);
+            sync();
+          });
+          list.append(el('label', { class: 'switch-row' }, [
+            el('span', { class: 'tx-icon', text: c ? c.icon : '🎫',
+              style: 'background:' + U.tintOf(c ? c.color : 'blue') }),
+            el('div', { class: 's-main' }, [
+              el('div', { text: t.note || (c ? c.name : 'Expense') }),
+              el('div', { class: 's-sub muted', text:
+                U.fmtDate(t.date, { day: 'numeric', month: 'short', year: 'numeric' }) +
+                ' · ' + fmtEUR(t.amount) })
+            ]),
+            cb
+          ]));
+        });
+      };
+      const sync = () => {
+        const sum = candidates.filter((t) => chosen.has(t.id))
+          .reduce((s, t) => s + t.amount, 0);
+        count.textContent = chosen.size
+          ? chosen.size + (chosen.size === 1 ? ' item · ' : ' items · ') + fmtEUR(sum)
+          : 'Nothing selected yet';
+      };
+      search.addEventListener('input', draw);
+      draw(); sync();
+
+      body.append(el('div', { class: 'field' }, [search]), count, list,
+        el('div', { class: 'spacer' }),
+        el('button', { class: 'btn block primary', text: 'Save', onclick: async () => {
+          /* Write only what changed: attach the newly ticked, detach the unticked.
+             Everything else about the transaction is left exactly as it was. */
+          const updates = [];
+          candidates.forEach((t) => {
+            const want = chosen.has(t.id);
+            const has = t.tripId === trip.id;
+            if (want === has) return;
+            const next = Object.assign({}, t);
+            if (want) next.tripId = trip.id; else delete next.tripId;
+            updates.push(next);
+          });
+          if (updates.length) {
+            await DB.bulkPut('transactions', updates);
+            await bumpChanges(updates.length);
+          }
+          api.close();
+          if (onDone) onDone();
+          toast(chosen.size ? chosen.size + ' attached to ' + trip.name : 'Nothing attached');
+        } }));
+    }, { tall: true });
+  }
+
+  function tripBookedAhead(trip) {
+    if (!trip || !trip.id) return [];
+    return DB.state.transactions
+      .filter((t) => t.type === 'expense' && t.tripId === trip.id &&
+        (t.date < trip.from || t.date > trip.to))
+      .sort((a, b) => a.date.localeCompare(b.date));
   }
 
   function detectTrips() {
@@ -2965,7 +3080,10 @@
               ' · ' + t.days + ' days' })
           ]),
           el('div', { class: 'trip-right' }, [
-            el('div', { class: 'trip-amt', text: fmtTripMoney(tr, t.spent) }),
+            // What the trip cost, booked-ahead included — matches the sheet's headline.
+            // Mixed currencies can only be added in euro, so fall back to it.
+            el('div', { class: 'trip-amt',
+              text: t.ahead > 0 ? fmtEUR(t.total) : fmtTripMoney(tr, t.spent) }),
             tr.budget ? el('div', { class: 'trip-bud ' +
               (t.spent > tr.budget ? 'neg' : 'muted'),
               text: 'of ' + fmtTripMoney(tr, tr.budget) }) : null
@@ -2973,7 +3091,7 @@
           el('span', { class: 's-chev', text: '›' })
         ]));
       });
-      const grand = saved.reduce((s, tr) => s + tripTotals(tr).spent, 0);
+      const grand = saved.reduce((s, tr) => s + tripTotals(tr).total, 0);
       card.append(el('p', { class: 'muted', style: 'margin-top:10px;text-align:right', text:
         'Total across trips: ' + fmtEUR(grand) }));
     }
@@ -3130,12 +3248,23 @@
     const t = tripTotals(trip);
     const groups = groupByMerchant(t.txs.filter((x) => x.type === 'expense'));
     openSheet((trip.emoji || '✈️') + ' ' + trip.name, (body) => {
-      body.append(el('div', { class: 'cat-detail-head' }, [
-        el('div', { class: 'cat-detail-total', text: fmtTripMoney(trip, t.spent) }),
-        el('div', { class: 'muted', text:
-          (tripHasFx(trip) ? '≈ ' + fmtEUR(t.spent) + ' · ' : '') +
-          t.days + ' days · ' + fmtTripMoney(trip, t.perDay) + ' per day' })
-      ]));
+      /* With booked-ahead costs the headline is the full cost of the trip. On a
+         foreign-currency trip that has to be euro: the tickets were paid in euro and
+         local currency can't add to them. Without any, nothing changes. */
+      const hasAhead = t.ahead > 0;
+      const headLines = [
+        el('div', { class: 'cat-detail-total',
+          text: hasAhead ? fmtEUR(t.total) : fmtTripMoney(trip, t.spent) })
+      ];
+      if (hasAhead) {
+        headLines.push(el('div', { class: 'muted', text:
+          fmtTripMoney(trip, t.spent) + (tripHasFx(trip) ? ' (≈ ' + fmtEUR(t.spent) + ')' : '') +
+          ' on the trip · + ' + fmtEUR(t.ahead) + ' booked ahead' }));
+      }
+      headLines.push(el('div', { class: 'muted', text:
+        (tripHasFx(trip) && !hasAhead ? '≈ ' + fmtEUR(t.spent) + ' · ' : '') +
+        t.days + ' days · ' + fmtTripMoney(trip, t.perDay) + ' per day' }));
+      body.append(el('div', { class: 'cat-detail-head' }, headLines));
       const tb = tripBudgetStatus(trip);
       if (tb) {
         body.append(el('div', { class: 'catbudget' }, [
@@ -3157,6 +3286,64 @@
         body.append(el('p', { class: 'muted', style: 'margin-bottom:10px', text:
           'Amounts converted at 1 ' + trip.currency + ' = ' + fmtEUR(trip.rate) +
           ' · ' + U.fmtCur(t.spent / trip.rate, trip.currency) + ' spent locally' }));
+      }
+
+      /* Booked-ahead costs sit apart from the charts on purpose: a flight bought in
+         May has no day inside the trip to be drawn on, and folding it into the donut
+         would make the charts stop adding up to the days you were actually there. */
+      if (trip.id) {
+        const ahead = el('div', { class: 'card' });
+        const drawAhead = () => {
+          ahead.innerHTML = '';
+          const list = tripBookedAhead(trip);
+          const sum = list.reduce((s, x) => s + x.amount, 0);
+          ahead.append(el('div', { class: 'card-head' }, [
+            el('h2', { text: 'Booked ahead' }),
+            el('button', { class: 'btn small', text: '+ Add',
+              onclick: () => openTripAttachSheet(trip, () => {
+                drawAhead();
+                render();                 // totals above this card moved too
+              }) })
+          ]));
+          if (!list.length) {
+            ahead.append(el('p', { class: 'muted', style: 'line-height:1.5', text:
+              'Flights, hotels, insurance — anything you paid for before leaving. ' +
+              'Added here they count toward what the trip cost, and stay in the month ' +
+              'you actually paid them.' }));
+            return;
+          }
+          list.forEach((x) => {
+            const c = DB.category(x.categoryId);
+            ahead.append(el('div', { class: 'ahead-row' }, [
+              el('span', { class: 'tx-icon', text: c ? c.icon : '🎫',
+                style: 'background:' + U.tintOf(c ? c.color : 'blue') }),
+              el('div', { class: 'ahead-main' }, [
+                el('div', { class: 'ahead-name', text: x.note || (c ? c.name : 'Expense') }),
+                el('div', { class: 'ahead-sub muted', text:
+                  U.fmtDate(x.date, { day: 'numeric', month: 'short', year: 'numeric' }) +
+                  (c ? ' · ' + c.name : '') })
+              ]),
+              // Always euro: these were paid at home, not at the trip's rate
+              el('div', { class: 'ahead-amt', text: fmtEUR(x.amount) }),
+              el('button', { class: 'btn small ghost', text: '✕', 'aria-label': 'Remove',
+                onclick: async () => {
+                  const next = Object.assign({}, x); delete next.tripId;
+                  await DB.put('transactions', next);
+                  drawAhead(); render();
+                } })
+            ]));
+          });
+          ahead.append(el('div', { class: 'budget-line', style: 'margin-top:8px' }, [
+            el('span', { class: 'muted', text: list.length +
+              (list.length === 1 ? ' item' : ' items') }),
+            el('span', { text: fmtEUR(sum) })
+          ]));
+          ahead.append(el('p', { class: 'muted', style: 'margin-top:6px;line-height:1.5', text:
+            'Counted in the trip total, not in the trip budget — this money already ' +
+            'came out of the month you paid it.' }));
+        };
+        drawAhead();
+        body.append(ahead);
       }
 
       tripCharts(body, trip);
@@ -5893,7 +6080,7 @@
         accountId: acctRemap.get(t.accountId) || t.accountId,
         toAccountId: acctRemap.get(t.toAccountId) || t.toAccountId,
         note: t.note || '', needsReview: t.needsReview,
-        excludeFromBudget: t.excludeFromBudget,
+        excludeFromBudget: t.excludeFromBudget, tripId: t.tripId,
         // Rebuilt field by field, so anything omitted here is dropped on merge:
         // without these a merged trip loses the amounts as they were actually paid.
         origAmount: t.origAmount, origCurrency: t.origCurrency, rate: t.rate
