@@ -48,7 +48,7 @@ const GUARDED = ['renderDashboard', 'budgetCard', 'budgetStatus', 'tripBudgetSta
   'openBudgetSkipSheet', 'budgetSkipReason', 'budgetOutliers',
   'openCategoryPickSheet', 'openCategorySheet', 'emojiPicker', 'lastGrapheme',
   'setupCard', 'setupSteps', 'maybeShowSwipeHint',
-  'tripTotals', 'tripBookedAhead', 'openTripAttachSheet'];
+  'tripTotals', 'tripBookedAhead', 'tripTagged', 'openTripAttachSheet'];
 /* Not guardable here: regex literals (catEmojiFor) read as identifiers because the
    checker strips strings but not regexes, and destructured parameters (makeSwipeable's
    { onTap, onEdit, onDelete }) aren't seen as declarations. Those get covered by

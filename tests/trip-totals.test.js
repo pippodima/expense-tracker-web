@@ -56,12 +56,12 @@ function world(txs, confirmed) {
     'const PROCESSOR_PREFIXES = [];',
     extract('budgetSkipCfg'), extract('budgetSkipReason'),
     extract('tripForDate'), extract('isProtectedRecurring'), extract('tripExpenseOf'),
-    extract('tripBookedAhead'), extract('tripTotals'), extract('tripBudgetStatus'),
+    extract('tripTagged'), extract('tripBookedAhead'), extract('tripTotals'), extract('tripBudgetStatus'),
     'function chartTotal(trip) {',
     '  ' + chartFilterSource(),
     '  return exp.reduce((s, t) => s + t.amount, 0);',
     '}',
-    'globalThis.api = { tripTotals, tripBudgetStatus, chartTotal };'
+    'globalThis.api = { tripTotals, tripBudgetStatus, chartTotal, tripTagged };'
   ].join('\n'), ctx);
   return ctx.api;
 }
@@ -159,12 +159,29 @@ console.log('\nbooked-ahead costs (a flight bought before leaving):');
     round(t.perDay) === 60, t.perDay);
 }
 {
-  /* Tagging something already inside the dates must not count it twice. */
-  const inside = tx({ date: '2026-09-04', amount: 80, note: 'MUSEO', tripId: 'tr' });
+  /* A ticket bought during the trip — the bus home on day 8. It belongs in the travel
+     list, but the date rule already counted it, so it must not be added again. */
+  const inside = tx({ date: '2026-09-08', amount: 35, note: 'BUS RITORNO', tripId: 'tr' });
   const api = world([...base, inside]);
   const t = api.tripTotals(TRIP);
-  ok('a tagged expense inside the dates is not double counted',
-    round(t.total) === 680 && t.aheadTxs.length === 0, [t.total, t.aheadTxs.length]);
+  ok('a ticket bought during the trip is not counted twice',
+    round(t.total) === 635, t.total);
+  ok('it is not treated as booked ahead', t.aheadTxs.length === 0, t.aheadTxs.length);
+  ok('but it is still listed as travel', api.tripTagged(TRIP).length === 1);
+  ok('and it still draws on the trip budget, being spent during it',
+    round(api.tripBudgetStatus(TRIP).spent) === 635, api.tripBudgetStatus(TRIP).spent);
+}
+{
+  /* Both kinds together: the outbound flight and the bus home. */
+  const api = world([...base,
+    tx({ date: '2026-07-28', amount: 214.6, note: 'PEGASUS', tripId: 'tr' }),
+    tx({ date: '2026-09-08', amount: 35, note: 'BUS RITORNO', tripId: 'tr' })]);
+  const t = api.tripTotals(TRIP);
+  ok('the travel list holds both', api.tripTagged(TRIP).length === 2);
+  ok('only the pre-paid one adds to the total',
+    round(t.total) === round(635 + 214.6), t.total);
+  ok('and only it is outside the budget',
+    round(api.tripBudgetStatus(TRIP).spent) === 635, api.tripBudgetStatus(TRIP).spent);
 }
 {
   /* Another trip's flight must not leak in. */

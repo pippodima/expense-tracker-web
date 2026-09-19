@@ -1353,3 +1353,37 @@ expense inside the dates not double counted, another trip's flight ignored, an u
 expense staying out, and a draft trip with no id. A 17-assertion browser pass covers the attach
 sheet, the ordering by nearness to the trip, the running selection total, the split headline,
 the list and grand total agreeing, and removal.
+
+### Chapter 48 — The bus home, and a Save button nobody could reach (2026-09-19)
+Two reports from using Chapter 47 for real.
+
+**The Save button was at the bottom of everything.** Tick one row near the top of a
+sixty-row list and the action is a long scroll away. Now a bar sticks to the bottom of the
+sheet and appears only once there is something to save — *including un-ticking everything*,
+which is a change worth keeping too, so the condition is "differs from what's stored" rather
+than "at least one selected". `.sheet-body` is already the scroll container, so
+`position: sticky; bottom: 0` was all it took.
+
+**A ticket bought during the trip couldn't be attached.** The filter only offered expenses
+*outside* the dates, because those are the ones that change the arithmetic. But a flight home
+booked on day 8 is travel exactly as much as the outbound one — it just happens to be counted
+already. The concept was too narrow, so it grew: the card is now **Travel & bookings**, and
+in-trip expenses can be tagged as well.
+
+The arithmetic stays honest by separating two ideas that had been one:
+- `tripTagged()` — everything attached to the trip, which is what the list shows.
+- `tripBookedAhead()` — only the out-of-range ones, which is what gets *added* to the total.
+
+So the bus home appears in the travel list, keeps drawing on the trip budget (it was spent
+during the trip, out of that month), and is not added a second time. Each row says which it is
+— *"8 set · during the trip"* versus *"28 lug · booked ahead"* — and the card's footer does the
+arithmetic out loud: *"214,60 € was paid before the trip and is added to its total, outside the
+trip budget. 35,00 € was spent during the trip and already counts in both."*
+
+**Ordering turned out to matter more than it looked.** Sorting purely by nearness to the trip
+put every restaurant meal of those ten days above the bookings — you open a screen called
+Travel & bookings and the first row is RISTORANTE 10. Now: what's already attached, then
+bookings around the trip, then the days themselves. The first row is the flight again.
+
+Also removed a duplicated figure — the running total was printed both above the list and in the
+new bar; the bar just says "Unsaved changes" and lets the number live in one place.

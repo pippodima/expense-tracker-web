@@ -2880,21 +2880,34 @@
       dates and not already claimed by another trip; the ones near the trip come first,
       since a flight is usually bought within a few months of leaving. */
   function openTripAttachSheet(trip, onDone) {
-    openSheet('Add booked-ahead costs', (body, api) => {
-      const chosen = new Set(tripBookedAhead(trip).map((t) => t.id));
+    openSheet('Travel & bookings', (body, api) => {
+      const saved = new Set(tripTagged(trip).map((t) => t.id));
+      const chosen = new Set(saved);
+      const inTrip = (iso) => iso >= trip.from && iso <= trip.to;
       const dayGap = (iso) => {
         const d = new Date(iso + 'T12:00:00');
         if (iso < trip.from) return (new Date(trip.from + 'T12:00:00') - d) / 86400000;
         return (d - new Date(trip.to + 'T12:00:00')) / 86400000;
       };
+      /* Expenses during the trip are offered too. A flight home bought on day 8 is
+         travel just as much as the outbound one — it is simply already counted, so
+         tagging it groups it here without changing any total.
+         Order matters more than it looks: sorting purely by nearness puts every meal
+         of the trip above the bookings, and you open this screen looking for a ticket.
+         So: what's already attached, then bookings around the trip, then the days
+         themselves — with search for anything specific. */
+      const rank = (t) => (saved.has(t.id) ? 0 : inTrip(t.date) ? 2 : 1);
       const candidates = DB.state.transactions
-        .filter((t) => t.type === 'expense' && (t.date < trip.from || t.date > trip.to) &&
-          (!t.tripId || t.tripId === trip.id))
-        .sort((a, b) => dayGap(a.date) - dayGap(b.date));
+        .filter((t) => t.type === 'expense' && (!t.tripId || t.tripId === trip.id))
+        .sort((a, b) => rank(a) - rank(b) ||
+          (inTrip(a.date) && inTrip(b.date)
+            ? a.date.localeCompare(b.date)
+            : dayGap(a.date) - dayGap(b.date)));
 
       body.append(el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:12px', text:
-        'These count toward what the trip cost. They stay in the month you paid them, ' +
-        'and they don\'t draw on the trip budget.' }));
+        'The cost of getting there and back. Anything paid before you left is added to ' +
+        'what the trip cost and stays in the month you paid it; anything bought during ' +
+        'the trip already counts, and is listed here for the record.' }));
 
       const search = el('input', { class: 'searchbox', type: 'search',
         placeholder: 'Search by note, category or amount…', autocomplete: 'off' });
@@ -2928,25 +2941,36 @@
               el('div', { text: t.note || (c ? c.name : 'Expense') }),
               el('div', { class: 's-sub muted', text:
                 U.fmtDate(t.date, { day: 'numeric', month: 'short', year: 'numeric' }) +
-                ' · ' + fmtEUR(t.amount) })
+                ' · ' + fmtEUR(t.amount) +
+                (inTrip(t.date) ? ' · during the trip, already counted' : '') })
             ]),
             cb
           ]));
         });
       };
+      /* The list can run to dozens of rows, so a Save button after it is a long scroll
+         away from the tick that needed saving. The bar sticks to the bottom of the
+         sheet instead, and only appears once there is actually something to save —
+         including un-ticking everything, which is a change worth keeping too. */
+      const saveBtn = el('button', { class: 'btn primary', text: 'Save' });
+      const barText = el('div', { class: 'savebar-text' });
+      const bar = el('div', { class: 'savebar' }, [barText, saveBtn]);
       const sync = () => {
         const sum = candidates.filter((t) => chosen.has(t.id))
           .reduce((s, t) => s + t.amount, 0);
         count.textContent = chosen.size
           ? chosen.size + (chosen.size === 1 ? ' item · ' : ' items · ') + fmtEUR(sum)
           : 'Nothing selected yet';
+        const dirty = chosen.size !== saved.size ||
+          [...chosen].some((id) => !saved.has(id));
+        bar.hidden = !dirty;
+        barText.textContent = 'Unsaved changes';
       };
       search.addEventListener('input', draw);
       draw(); sync();
 
-      body.append(el('div', { class: 'field' }, [search]), count, list,
-        el('div', { class: 'spacer' }),
-        el('button', { class: 'btn block primary', text: 'Save', onclick: async () => {
+      body.append(el('div', { class: 'field' }, [search]), count, list, bar);
+      Object.assign(saveBtn, { onclick: async () => {
           /* Write only what changed: attach the newly ticked, detach the unticked.
              Everything else about the transaction is left exactly as it was. */
           const updates = [];
@@ -2965,16 +2989,23 @@
           api.close();
           if (onDone) onDone();
           toast(chosen.size ? chosen.size + ' attached to ' + trip.name : 'Nothing attached');
-        } }));
+      } });
     }, { tall: true });
   }
 
-  function tripBookedAhead(trip) {
+  function tripTagged(trip) {
     if (!trip || !trip.id) return [];
     return DB.state.transactions
-      .filter((t) => t.type === 'expense' && t.tripId === trip.id &&
-        (t.date < trip.from || t.date > trip.to))
+      .filter((t) => t.type === 'expense' && t.tripId === trip.id)
       .sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  /* Only the ones bought outside the dates add to the trip total — a return bus
+     bought on day 8 is already counted by the date rule, and adding it again would
+     double it. Tagging it still has a point: it belongs in the travel list with the
+     outbound flight, which is the question "what did getting there and back cost". */
+  function tripBookedAhead(trip) {
+    return tripTagged(trip).filter((t) => t.date < trip.from || t.date > trip.to);
   }
 
   function detectTrips() {
@@ -3295,10 +3326,12 @@
         const ahead = el('div', { class: 'card' });
         const drawAhead = () => {
           ahead.innerHTML = '';
-          const list = tripBookedAhead(trip);
+          const list = tripTagged(trip);
           const sum = list.reduce((s, x) => s + x.amount, 0);
+          const aheadSum = tripBookedAhead(trip).reduce((s, x) => s + x.amount, 0);
+          const duringSum = sum - aheadSum;
           ahead.append(el('div', { class: 'card-head' }, [
-            el('h2', { text: 'Booked ahead' }),
+            el('h2', { text: 'Travel & bookings' }),
             el('button', { class: 'btn small', text: '+ Add',
               onclick: () => openTripAttachSheet(trip, () => {
                 drawAhead();
@@ -3307,9 +3340,9 @@
           ]));
           if (!list.length) {
             ahead.append(el('p', { class: 'muted', style: 'line-height:1.5', text:
-              'Flights, hotels, insurance — anything you paid for before leaving. ' +
-              'Added here they count toward what the trip cost, and stay in the month ' +
-              'you actually paid them.' }));
+              'Flights, hotels, insurance, the bus home — the cost of getting there and ' +
+              'back. Anything paid before you left is added to what the trip cost, and ' +
+              'stays in the month you actually paid it.' }));
             return;
           }
           list.forEach((x) => {
@@ -3321,7 +3354,8 @@
                 el('div', { class: 'ahead-name', text: x.note || (c ? c.name : 'Expense') }),
                 el('div', { class: 'ahead-sub muted', text:
                   U.fmtDate(x.date, { day: 'numeric', month: 'short', year: 'numeric' }) +
-                  (c ? ' · ' + c.name : '') })
+                  ' · ' + (x.date >= trip.from && x.date <= trip.to
+                    ? 'during the trip' : 'booked ahead') })
               ]),
               // Always euro: these were paid at home, not at the trip's rate
               el('div', { class: 'ahead-amt', text: fmtEUR(x.amount) }),
@@ -3338,9 +3372,15 @@
               (list.length === 1 ? ' item' : ' items') }),
             el('span', { text: fmtEUR(sum) })
           ]));
-          ahead.append(el('p', { class: 'muted', style: 'margin-top:6px;line-height:1.5', text:
-            'Counted in the trip total, not in the trip budget — this money already ' +
-            'came out of the month you paid it.' }));
+          /* Two kinds sit in this list and they reach the total differently, so say
+             which is which rather than leaving the arithmetic unexplained. */
+          ahead.append(el('p', { class: 'muted', style: 'margin-top:6px;line-height:1.5',
+            text: duringSum > 0.005
+              ? fmtEUR(aheadSum) + ' was paid before the trip and is added to its total, ' +
+                'outside the trip budget. ' + fmtEUR(duringSum) + ' was spent during the ' +
+                'trip and already counts in both.'
+              : 'Counted in the trip total, not in the trip budget — this money already ' +
+                'came out of the month you paid it.' }));
         };
         drawAhead();
         body.append(ahead);
