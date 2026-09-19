@@ -775,8 +775,15 @@
       .reduce((s, t) => s + t.amount, 0) : 0;
     const todayAllowance = daysLeft > 0
       ? (trip.budget - spentBefore - committedAhead) / daysLeft : 0;
+    /* Money spent on the trip that deliberately doesn't draw on its pot. Reported so
+       the meter can say why it disagrees with the trip's own total, instead of the
+       two numbers silently differing. */
+    const excluded = DB.state.transactions.filter(
+      (t) => t.type === 'expense' && t.date >= trip.from && t.date <= trip.to &&
+        !isProtectedRecurring(t) && budgetSkipReason(t))
+      .reduce((s, t) => s + t.amount, 0);
     return {
-      trip, spent, budget: trip.budget, remaining: trip.budget - spent,
+      trip, spent, budget: trip.budget, remaining: trip.budget - spent, excluded,
       over: spent > trip.budget, days, daysLeft, active, committedAhead,
       spentToday, todayAllowance, todayRemaining: todayAllowance - spentToday
     };
@@ -2840,9 +2847,13 @@
   const trips = () => (DB.state.meta.trips || []).slice()
     .sort((a, b) => b.from.localeCompare(a.from));
 
+  /* What the trip cost. A confirmed subscription that happens to be charged while you
+     are away is normal life, not travel — the charts and the budget meter have always
+     left those out, and this didn't, so the same trip reported a headline that no other
+     figure on the screen agreed with. One definition, used everywhere. */
   function tripTotals(trip) {
     const txs = DB.state.transactions.filter(
-      (t) => t.date >= trip.from && t.date <= trip.to);
+      (t) => t.date >= trip.from && t.date <= trip.to && !isProtectedRecurring(t));
     const spent = txs.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
     const days = Math.round((new Date(trip.to) - new Date(trip.from)) / 86400000) + 1;
     return { txs, spent, days, perDay: days ? spent / days : 0 };
@@ -3131,10 +3142,13 @@
               text: fmtTripMoney(trip, tb.spent) + ' / ' + fmtTripMoney(trip, tb.budget) })
           ]),
           meter(tb.spent, tb.budget),
-          el('div', { class: 'muted', style: 'margin-top:6px', text: tb.over
+          el('div', { class: 'muted', style: 'margin-top:6px', text: (tb.over
             ? fmtTripBoth(trip, -tb.remaining) + ' over'
             : fmtTripBoth(trip, tb.remaining) + ' left' + (tb.active && tb.daysLeft
-                ? ' · ' + fmtTripMoney(trip, tb.todayAllowance) + ' for today' : '') })
+                ? ' · ' + fmtTripMoney(trip, tb.todayAllowance) + ' for today' : '')) +
+            // Say why this figure is lower than the trip's own total
+            (tb.excluded > 0
+              ? ' · ' + fmtTripMoney(trip, tb.excluded) + ' not counted in the budget' : '') })
         ]));
       }
       body.append(el('button', { class: 'btn block ghost', style: 'margin-bottom:12px',
@@ -3168,7 +3182,9 @@
      is a budget — whether the pace is going to hold. Everything is drawn in the
      trip's own currency, since that's what you were reading off price tags. */
   function tripCharts(body, trip) {
-    // Same expense set as the budget meter above, so the numbers agree
+    /* Same expense set as the trip's headline total, so the charts add up to it.
+       The budget meter is deliberately narrower — it also drops anything held back
+       from the budget — and says so on its own line. */
     const exp = DB.state.transactions.filter(
       (t) => t.type === 'expense' && t.date >= trip.from && t.date <= trip.to &&
         !isProtectedRecurring(t));

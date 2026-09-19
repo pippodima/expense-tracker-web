@@ -1236,3 +1236,52 @@ dismissal.
 The lesson is about defaults, not code: an onboarding checklist quietly assumes every item is
 something the user *should* do. Two of these were things they *could* do — and a checklist that
 can't take no for an answer stops being help and becomes nagging.
+
+### Chapter 45 — One trip, three totals (2026-09-19)
+Reported from real use, at the end of a trip: the trip sheet showed **three different
+numbers** — the headline, the budget meter, and the "where it went" chart — with no
+explanation of why any of them disagreed.
+
+Reproduced exactly, on a ten-day trip with a 1.000 € budget, 600 € of ordinary spending, a
+12,99 € Netflix charge during the dates, and a 300 € car repair marked *don't count in the
+budget*:
+
+```
+headline  (tripTotals)        912,99 €
+donut     (tripCharts)        900,00 €
+budget    (tripBudgetStatus)  600,00 €
+```
+
+Three functions, three different filters:
+
+| number | excluded confirmed subscriptions? | excluded budget-skipped? |
+|---|---|---|
+| headline — `tripTotals` | **no** | **no** |
+| charts — `tripCharts` | yes | **no** |
+| meter — `tripBudgetStatus` | yes | yes |
+
+**Half of this was self-inflicted.** Before Chapter 40 the charts and the meter used an
+identical filter, and `tripCharts` carried the comment *"Same expense set as the budget meter
+above, so the numbers agree."* Chapter 40 added `!budgetSkipReason(t)` to `tripBudgetStatus`
+only — the invariant broke, a third number appeared, and the comment went on asserting
+something that was no longer true. A comment claiming an invariant is worth nothing unless a
+test holds it.
+
+The fix settles what each number *means* rather than patching them into agreement:
+- **`tripTotals` now excludes confirmed subscriptions.** A subscription billed while you are
+  away is normal life, not travel — which is what the charts and the meter had always said.
+  The headline was the outlier. Headline and charts now always agree: one figure for *what the
+  trip cost*.
+- **The budget meter stays narrower on purpose.** Money held back from the budget is still
+  money spent, so it belongs in the trip's total, but it must not draw down the trip's pot.
+  `tripBudgetStatus` now returns `excluded`, and the meter says *"300,00 € not counted in the
+  budget"* — the same honesty the monthly card already practises.
+
+So: two numbers, each with a stated reason, instead of three that silently differ.
+
+`tests/trip-totals.test.js` — 17 checks pinning the invariant that the headline and the chart
+filter add up to the same money, across a plain trip, a mid-trip subscription, a
+budget-excluded expense, both together, and a trip containing income and transfers. It reads
+`tripCharts`' filter **out of the source** rather than duplicating it, so the two can't drift
+apart again without the test noticing. Run against the previous commit it fails seven ways,
+which is the only real evidence that a regression test guards anything.
