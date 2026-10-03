@@ -1140,6 +1140,11 @@
       el('h1', { text: 'Home' }),
       el('div', { class: 'title-right' }, [
         el('span', { class: 'muted total-chip', text: fmtEUR(DB.totalBalance()) + ' total' }),
+        el('button', { class: 'icon-btn', 'aria-label': 'Import Wallet notifications',
+          onclick: importWalletNotifications,
+          html: '<svg viewBox="0 0 24 24"><path d="M19.5 9.5A8 8 0 0 0 5.2 7.4"/>' +
+            '<path d="M5 3.5v4h4"/><path d="M4.5 14.5a8 8 0 0 0 14.3 2.1"/>' +
+            '<path d="M19 20.5v-4h-4"/></svg>' }),
         arrangeButton('dashboard'),
         el('button', { class: 'icon-btn', 'aria-label': 'Search', onclick: openGlobalSearch,
           html: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/>' +

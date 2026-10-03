@@ -1460,3 +1460,8 @@ Not done yet: a statement import and a Wallet import of the *same* payment don't
 other (they carry different ids, and adoption only considers hand-entered rows), so using both
 for one card would double it.
 
+
+**Follow-up — a sync button on Home.** The import worked on the phone, and Settings is three taps
+deep for something done daily, so Home's header got a ↻ button beside Arrange, Search and the
+privacy eye. It runs the same import (file picker → summary sheet). Checked at 360 px with a
+six-digit balance: the total wraps to two lines, nothing overflows.
