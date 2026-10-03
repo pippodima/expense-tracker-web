@@ -22,6 +22,7 @@ __pycache__/
 # Pasted bank statements used only for local testing
 test.txt
 *.paste.txt
+*_notifiche.txt
 test.json
 
 # Generated demo dataset for screenshots (rebuild with: node tools/demo-data.js)

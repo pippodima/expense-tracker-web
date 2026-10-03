@@ -31,7 +31,7 @@ const run = (args, label) => {
 
 let failed = 0;
 
-for (const f of ['js/util.js', 'js/db.js', 'js/csv.js', 'js/detect.js', 'js/charts.js', 'js/app.js']) {
+for (const f of ['js/util.js', 'js/db.js', 'js/csv.js', 'js/detect.js', 'js/wallet.js', 'js/charts.js', 'js/app.js']) {
   try { execFileSync(process.execPath, ['--check', f], { cwd: ROOT }); }
   catch (e) { console.error('syntax error in ' + f); failed++; }
 }
@@ -48,7 +48,8 @@ const GUARDED = ['renderDashboard', 'budgetCard', 'budgetStatus', 'tripBudgetSta
   'openBudgetSkipSheet', 'budgetSkipReason', 'budgetOutliers',
   'openCategoryPickSheet', 'openCategorySheet', 'emojiPicker', 'lastGrapheme',
   'setupCard', 'setupSteps', 'maybeShowSwipeHint',
-  'tripTotals', 'tripBookedAhead', 'tripTagged', 'openTripAttachSheet'];
+  'tripTotals', 'tripBookedAhead', 'tripTagged', 'openTripAttachSheet',
+  'handleWalletText', 'walletAccountMap'];
 /* Not guardable here: regex literals (catEmojiFor) read as identifiers because the
    checker strips strings but not regexes, and destructured parameters (makeSwipeable's
    { onTap, onEdit, onDelete }) aren't seen as declarations. Those get covered by

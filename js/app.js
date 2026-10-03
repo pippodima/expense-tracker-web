@@ -4781,13 +4781,24 @@
 
     /* ---------- Import (bank sync + CSV) ---------- */
     root.append(settingsSection('import', '📥', 'Import transactions',
-      reviewN > 0 ? reviewN + ' waiting for a category' : 'Bank sync · CSV', (b) => {
-        b.append(el('div', { class: 'sub-title', text: 'Statement file' }),
+      reviewN > 0 ? reviewN + ' waiting for a category' : 'Wallet · Bank sync · CSV', (b) => {
+        const walletAt = DB.state.meta.walletImportedAt;
+        b.append(el('div', { class: 'sub-title', text: 'Wallet notifications' }),
+          el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:10px', text:
+            'Pick the text file your Wallet notifications are saved to. Only new payments are ' +
+            'added — import the same file as often as you like. Each card goes to the account ' +
+            'with its name, created the first time a card shows up.' +
+            (walletAt ? ' Last import: ' + new Date(walletAt).toLocaleDateString('it-IT',
+              { day: 'numeric', month: 'short' }) + '.' : '') }),
+          el('button', { class: 'btn block primary', text: 'Import Wallet notifications',
+            onclick: importWalletNotifications }),
+          el('hr', { class: 'sep' }),
+          el('div', { class: 'sub-title', text: 'Statement file' }),
           el('p', { class: 'muted', style: 'line-height:1.5;margin-bottom:10px', text:
             'Paste your bank statement into a text file, convert it with sync/paste_to_sync.py ' +
             '(runs on this phone in a-Shell — see sync/README.md), then import the result here. ' +
             'Re-imports merge — never duplicate.' }),
-          el('button', { class: 'btn block primary', text: 'Import statement file',
+          el('button', { class: 'btn block', text: 'Import statement file',
             onclick: importBankSync }));
         if (reviewN > 0) {
           b.append(el('div', { class: 'spacer' }),
@@ -5344,6 +5355,57 @@
     });
   }
 
+  /** The Wallet notification log (see js/wallet.js). The file only grows, so the whole
+      thing is re-read every time and the externalId upsert keeps it idempotent. */
+  function importWalletNotifications() {
+    pickFile('.txt,text/plain', (text) => handleWalletText(text));
+  }
+
+  async function handleWalletText(text) {
+    const { rows, foreign, broken } = Wallet.parse(text);
+    if (!rows.length) {
+      return toast(foreign ? 'Only foreign-currency payments in this file'
+        : 'No Wallet notifications found in this file');
+    }
+    const { map, created } = await walletAccountMap(rows);
+    const notes = [];
+    if (created.length) {
+      notes.push('New account' + (created.length === 1 ? ': ' : 's: ') + created.join(', ') +
+        ' — created for a card seen for the first time.');
+    }
+    if (foreign) {
+      notes.push(foreign + ' payment' + (foreign === 1 ? '' : 's') +
+        ' in another currency skipped — add ' + (foreign === 1 ? 'it' : 'them') + ' by hand.');
+    }
+    if (broken) notes.push(broken + ' incomplete notification' + (broken === 1 ? '' : 's') + ' ignored.');
+    await DB.setMeta('walletImportedAt', Date.now());
+    await applyBankSync({ kind: 'bank-sync', title: 'Wallet payments imported',
+      transactions: rows, summaryNotes: notes }, map);
+  }
+
+  /** Each card title is its own account: the one it was matched to before, else an
+      account with the same name (any case), else a new one named after the card.
+      Remembered by card, so renaming the account later doesn't spawn a twin. */
+  async function walletAccountMap(rows) {
+    const map = Object.assign({}, DB.state.meta.bankAccountMap || {});
+    const created = [];
+    let changed = false;
+    const cards = new Map(rows.map((r) => [r.accountUuid, r.card]));
+    for (const [key, card] of cards) {
+      if (map[key] && DB.account(map[key])) continue;
+      const want = card.trim().toLowerCase();
+      let acct = DB.state.accounts.find((a) => (a.name || '').trim().toLowerCase() === want);
+      if (!acct) {
+        acct = await DB.put('accounts', { id: null, name: card.trim(), type: 'checking', startingBalance: 0 });
+        created.push(acct.name);
+      }
+      map[key] = acct.id;
+      changed = true;
+    }
+    if (changed) await DB.setMeta('bankAccountMap', map);
+    return { map, created };
+  }
+
   async function handleBankSyncData(data) {
     if (!data || data.kind !== 'bank-sync' || !Array.isArray(data.transactions)) {
       return toast('Not a statement file — create one with sync/paste_to_sync.py');
@@ -5445,14 +5507,14 @@
         const adopt = bucket.shift();
         // Keep the user's category/note/account; attach the bank id so future syncs
         // update it. For a converted entry the bank's euro amount is the real one.
-        const merged = { ...adopt, externalId: r.externalId };
+        const kept = { ...adopt, externalId: r.externalId };
         if (adopt.origCurrency && Math.abs(adopt.amount - amount) > 0.005) {
-          merged.amount = amount;
+          kept.amount = amount;
           if (adopt.origAmount) {
-            merged.rate = Math.round((amount / adopt.origAmount) * 1e6) / 1e6;
+            kept.rate = Math.round((amount / adopt.origAmount) * 1e6) / 1e6;
           }
         }
-        toPut.push(merged);
+        toPut.push(kept);
         byExternal.set(r.externalId, adopt);
         merged++;
         continue;
@@ -5483,7 +5545,7 @@
       ui.stats.donutSel = null;
     }
 
-    openSheet('Bank sync imported', (body, api) => {
+    openSheet(data.title || 'Bank sync imported', (body, api) => {
       body.append(el('div', { class: 'import-summary card', html:
         `<span class="ok">${added} new transactions</span><br>` +
         (merged ? `<span class="ok">${merged} merged with entries you already had</span><br>` : '') +
@@ -5492,6 +5554,8 @@
         (skipped ? `<span class="dup">${skipped} rows skipped (invalid)</span><br>` : '') +
         (review ? `<strong>${review} need a category</strong> — they’re in the review queue` : 'All categorized by your rules ✓')
       }));
+      (data.summaryNotes || []).forEach((n) => body.append(el('p', { class: 'muted',
+        style: 'margin:0 0 12px;line-height:1.5', text: n })));
       if (review) {
         body.append(el('button', {
           class: 'btn block primary', text: 'Review them now',

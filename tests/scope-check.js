@@ -66,7 +66,7 @@ const GLOBALS = new Set(['window', 'document', 'navigator', 'location', 'history
   'crypto', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'isFinite', 'isNaN',
   'parseInt', 'parseFloat', 'requestAnimationFrame', 'indexedDB', 'localStorage', 'caches', 'alert',
   'prompt', 'confirm', 'TextEncoder', 'TextDecoder', 'Uint8Array', 'ArrayBuffer', 'btoa', 'atob',
-  'DB', 'U', 'CSV', 'Charts', 'Detect', 'undefined', 'null', 'true', 'false', 'this', 'arguments', 'globalThis', 'Infinity', 'NaN']);
+  'DB', 'U', 'CSV', 'Charts', 'Detect', 'Wallet', 'undefined', 'null', 'true', 'false', 'this', 'arguments', 'globalThis', 'Infinity', 'NaN']);
 const KEYWORDS = new Set(['function', 'return', 'if', 'else', 'for', 'while', 'do', 'switch',
   'case', 'break', 'continue', 'const', 'let', 'var', 'new', 'typeof', 'instanceof', 'in', 'of',
   'delete', 'void', 'try', 'catch', 'finally', 'throw', 'async', 'await', 'yield', 'class',

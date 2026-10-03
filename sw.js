@@ -1,6 +1,6 @@
 /* Service worker: network-first for our own files (so updates always reach the
    device when online), cache fallback so the app still works fully offline. */
-const CACHE = 'expense-tracker-v50';
+const CACHE = 'expense-tracker-v51';
 const ASSETS = [
   './',
   './index.html',
@@ -11,6 +11,7 @@ const ASSETS = [
   './js/charts.js',
   './js/csv.js',
   './js/detect.js',
+  './js/wallet.js',
   './js/app.js',
   './icons/icon-192.png',
   './icons/icon-512.png',

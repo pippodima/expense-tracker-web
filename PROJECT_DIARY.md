@@ -57,6 +57,7 @@ Static files, loaded in order by `index.html`:
 | `js/util.js` | Formatting (EUR it-IT, dates), ids, the validated color palette, DOM helpers, toast, file download |
 | `js/db.js` | Storage layer — IndexedDB with transparent in-memory fallback; domain helpers (balances, category suggestion, duplicate keys) |
 | `js/csv.js` | CSV parsing (quotes, auto delimiter), bank date/amount parsing, CSV serialization |
+| `js/wallet.js` | Parser for the Wallet notification log (`Titolo/Sottotitolo/Corpo/Data` blocks) → transactions with stable ids, one account per card |
 | `js/charts.js` | Hand-built SVG charts: donut, single bars, grouped bars, net line |
 | `js/app.js` | Everything else: views, navigation, forms/sheets, budget, stats, CSV import wizard, backup + reminders |
 | `sw.js` | Service worker — precache app shell, cache-first, offline fallback |
@@ -1427,3 +1428,35 @@ left in the budget still isn't added, because it *is* already counted. Rows say 
 The lesson is about test data. Every earlier suite used a tidy ten-day trip with a handful of
 expenses, and all three of these needed *volume* and a real flag combination to show up. A
 screenshot from the phone is worth a lot of synthetic fixtures.
+
+### Chapter 50 — Wallet notifications, one account per card (2026-10-03)
+An iOS automation already appends every Apple Wallet payment notification to a text file —
+card name as the title, `Merchant. City, Region` as the subtitle, the amount as the body, then
+the date. The question was whether the app could pick those up on its own. It can't: a web app
+can't read a file it wasn't handed, and nothing runs while it's closed. What it *can* do is make
+the hand-off cheap and safe to repeat.
+
+- **Settings → Import transactions → Import Wallet notifications.** Pick the file, done. No
+  a-Shell, no converter — `js/wallet.js` parses it in the app.
+- **The file is never cleared.** Each payment gets a stable `externalId` (date, minute, amount,
+  card, merchant, plus an occurrence count for a genuine same-minute repeat), so the whole log is
+  re-read every time and goes through the same upsert as statement files: old rows are "already
+  up to date", only new ones are added, and a payment you'd already typed in by hand is merged.
+- **Each card is its own account.** The notification title picks the account: the one it was
+  matched to before, else an account with the same name (any case), else a new one named after
+  the card — paying with N26 for the first time creates "N26". The match is remembered per card,
+  so renaming the account later doesn't spawn a twin.
+- The merchant is split from the place at the last `". "` before a `City, Region` tail, so the
+  note reads "The Book Pub" and rules match on the name. Foreign-currency charges are skipped
+  and counted (there's no euro amount to record yet); refunds (`+` / "rimborso") are income.
+
+**And a bug the browser run found.** Driving the real import in headless Chrome crashed on the
+first merge: inside `applyBankSync` the adopted row was called `merged` — the same name as the
+counter — so `merged++` threw "Assignment to constant variable". Every import that merged with a
+hand-entered transaction had been failing since Chapter 26's foreign-currency work. Renamed; the
+statement import gets the fix too.
+
+Not done yet: a statement import and a Wallet import of the *same* payment don't recognise each
+other (they carry different ids, and adoption only considers hand-entered rows), so using both
+for one card would double it.
+
