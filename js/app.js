@@ -5367,10 +5367,10 @@
   }
 
   async function handleWalletText(text) {
-    const { rows, foreign, broken } = Wallet.parse(text);
+    const { rows, foreign, broken, ignored } = Wallet.parse(text);
     if (!rows.length) {
       return toast(foreign ? 'Only foreign-currency payments in this file'
-        : 'No Wallet notifications found in this file');
+        : 'No Wallet payments found in this file');
     }
     const { map, created } = await walletAccountMap(rows);
     const notes = [];
@@ -5383,6 +5383,10 @@
         ' in another currency skipped — add ' + (foreign === 1 ? 'it' : 'them') + ' by hand.');
     }
     if (broken) notes.push(broken + ' incomplete notification' + (broken === 1 ? '' : 's') + ' ignored.');
+    if (ignored) {
+      notes.push(ignored + ' notification' + (ignored === 1 ? '' : 's') +
+        ' that ' + (ignored === 1 ? "wasn't a payment" : "weren't payments") + ' skipped (stamps, passes…).');
+    }
     await DB.setMeta('walletImportedAt', Date.now());
     await applyBankSync({ kind: 'bank-sync', title: 'Wallet payments imported',
       transactions: rows, summaryNotes: notes }, map);

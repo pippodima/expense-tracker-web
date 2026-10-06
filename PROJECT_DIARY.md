@@ -1465,3 +1465,23 @@ for one card would double it.
 deep for something done daily, so Home's header got a ↻ button beside Arrange, Search and the
 privacy eye. It runs the same import (file picker → summary sheet). Checked at 360 px with a
 six-digit balance: the total wraps to two lines, nothing overflows.
+
+### Chapter 51 — Only payments from the Wallet log (2026-10-07)
+The automation fires on *every* Wallet notification, not just payments. The first stray one was
+a loyalty pass: title `tappa-mi`, body `2/10 stamps earned`. The importer took the first number
+it found and read no currency mark as euro, so the stamp card became a €2 expense on a brand-new
+"name" account.
+
+The question was where to filter: in the iOS automation or in the app. The app won. The log is
+the raw record, so if a filter is wrong, fixing the parser and re-importing recovers everything.
+A filter in Shortcuts loses data silently, and simple rules there ("title is buddy", "body
+contains €") either break on a new card or drop foreign charges.
+
+The rule: **a body is a payment only if it is an amount with exactly one currency mark, and
+nothing else** (an optional sign and an optional "Rimborso:" in front). `5,00 €`, `+12,50 €`,
+`$8.99` and `8,99 USD` pass. `2/10 stamps earned`, `12`, and a promo like `Hai risparmiato 2,00 €
+sul tuo ordine` don't. The number shapes it accepts are only the ones `parseAmount` reads
+correctly, so `12.5 €` is turned away instead of being misread as €125. The check runs before
+the account lookup, so a pass can never create an account. Skipped blocks are counted in the
+import summary ("1 notification that wasn't a payment skipped"). If Apple ever changes the
+payment format, that number is how we'll notice.

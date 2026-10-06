@@ -30,6 +30,25 @@ const Wallet = (() => {
   const LINE_RE = /^\s*([A-Za-z]+)\s*:\s?(.*)$/;
   const DATE_RE = /(\d{1,2})\s+([A-Za-zàé]+)\.?\s+(\d{4})(?:\s*,?\s*(\d{1,2})[:.](\d{2}))?/;
 
+  /* A payment's body is an amount and nothing else: "5,00 €", "+12,50 €", "$8.99",
+     "Rimborso: 8,00 €". Wallet also notifies about loyalty stamps, passes, cards added —
+     "2/10 stamps earned" has a number in it, so finding *a* number isn't enough.
+     The number shapes are the ones parseAmount reads right: Italian thousands
+     ("1.234,56"), a comma decimal, or a dot followed by exactly two digits. No `i` flag:
+     [A-Z]{3} is a currency code, not any three-letter word. */
+  const REFUND_WORD = /^(?:rimborso|refund|accredito)\s*:?\s*/i;
+  const CUR = '(?:[A-Z]{1,3}\\s?)?[€$£¥₹]|[A-Z]{3}';
+  const AMOUNT_ONLY = new RegExp(
+    '^[+\\-−]?\\s*(' + CUR + ')?\\s*' +
+    '(?:\\d{1,3}(?:[.\\s]\\d{3})+(?:,\\d{1,2})?|\\d+(?:,\\d{1,2}|\\.\\d{2})?)' +
+    '\\s*(' + CUR + ')?$');
+
+  /** True when the body is an amount with exactly one currency mark, nothing more. */
+  function isPaymentBody(s) {
+    const m = AMOUNT_ONLY.exec(String(s || '').trim().replace(REFUND_WORD, ''));
+    return !!m && !m[1] !== !m[2];
+  }
+
   /** "3 ott 2026, 01:30" → { date: '2026-10-03', time: '01:30' } */
   function parseDate(s) {
     const m = DATE_RE.exec(s || '');
@@ -76,10 +95,11 @@ const Wallet = (() => {
   /** The account key for a card title: same card, same account, whatever its case. */
   const cardKey = (card) => 'wallet:' + String(card || '').trim().toLowerCase();
 
-  /** Parse the whole log. Returns { rows, foreign, broken }:
+  /** Parse the whole log. Returns { rows, foreign, broken, ignored }:
         rows    — importable transactions (signed amount, negative = expense)
         foreign — blocks charged in another currency (skipped: no euro amount yet)
-        broken  — blocks missing a card, amount or date */
+        broken  — blocks missing a card, body or date
+        ignored — complete blocks that aren't payments (stamps, passes, …) */
   function parse(text) {
     const blocks = [];
     let cur = null, lastKey = null;
@@ -100,11 +120,13 @@ const Wallet = (() => {
 
     const rows = [];
     const seen = new Map();
-    let foreign = 0, broken = 0;
+    let foreign = 0, broken = 0, ignored = 0;
     for (const b of blocks) {
       const when = parseDate(b.date);
-      const amt = parseAmount(b.body);
-      if (!b.card || !when || !amt) { broken++; continue; }
+      if (!b.card || !when || !b.body) { broken++; continue; }
+      // Checked before anything else, so a loyalty pass never becomes an account.
+      const amt = isPaymentBody(b.body) && parseAmount(b.body);
+      if (!amt) { ignored++; continue; }
       if (!amt.euro) { foreign++; continue; }
       const { merchant, place } = splitSubtitle(b.sub);
       const signed = amt.sign * amt.cents;
@@ -124,8 +146,8 @@ const Wallet = (() => {
         accountUuid: cardKey(b.card)
       });
     }
-    return { rows, foreign, broken };
+    return { rows, foreign, broken, ignored };
   }
 
-  return { parse, parseDate, parseAmount, splitSubtitle, cardKey };
+  return { parse, parseDate, parseAmount, isPaymentBody, splitSubtitle, cardKey };
 })();

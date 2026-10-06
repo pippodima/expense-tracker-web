@@ -62,6 +62,25 @@ ok('foreign currency flagged', Wallet.parseAmount('12,00 US$').euro === false &&
 const fx = Wallet.parse('Titolo: N26\nSottotitolo: Shop. London, UK\nCorpo: 9,99 £\nData: 1 ott 2026, 10:00');
 ok('foreign payment skipped, counted', fx.rows.length === 0 && fx.foreign === 1, fx);
 
+/* ---- Only payments: the body must be an amount with a currency, nothing else ---- */
+[['5,00 €', true], ['+12,50 €', true], ['Rimborso: 8,00 €', true], ['Rimborso 5,00 €', true],
+  ['1.234,56 €', true], ['1 234,56 €', true], ['€ 5,00', true], ['$8.99', true],
+  ['8,99 USD', true], ['12,00 US$', true], ['-3,50 €', true],
+  ['2/10 stamps earned', false], ['Carta aggiunta', false], ['12', false], ['12,00', false],
+  ['Hai risparmiato 2,00 € sul tuo ordine', false], ['5,00 € · Contactless', false],
+  ['12.5 €', false], ['5,00 € EUR', false], ['abc 5,00', false], ['', false]
+].forEach(([body, want]) => ok((want ? 'payment: ' : 'not a payment: ') + JSON.stringify(body),
+  Wallet.isPaymentBody(body) === want));
+
+const STAMPS = 'Titolo: tappa-mi\nSottotitolo: \nCorpo: 2/10 stamps earned\nData: 4 ott 2026, 17:29';
+const mixed = Wallet.parse(SAMPLE + '\n' + STAMPS);
+ok('loyalty stamps skipped, counted, no account for them', mixed.rows.length === 2 &&
+  mixed.ignored === 1 && !mixed.broken && !mixed.rows.some((x) => x.card === 'tappa-mi'), mixed);
+ok('ids unchanged by a skipped block in between',
+  Wallet.parse(STAMPS + '\n' + SAMPLE).rows[0].externalId === r.rows[0].externalId);
+ok('zero amount is not a payment', Wallet.parse(SAMPLE.split('\n').slice(0, 2).join('\n') +
+  '\nCorpo: 0,00 €\nData: 3 ott 2026, 01:30').ignored === 1);
+
 /* ---- Subtitles ---- */
 ok('merchant with its own period', Wallet.splitSubtitle('St. Mary Bar. Firenze, Toscana').merchant === 'St. Mary Bar');
 ok('no place at all', Wallet.splitSubtitle('Amazon').merchant === 'Amazon');
