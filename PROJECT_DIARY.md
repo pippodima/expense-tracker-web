@@ -139,6 +139,13 @@ export. A **change counter** tracks edits since the last backup; a smart trigger
 (`N days` **or** `N changes`, whichever first, with snooze) shows a **friendly reminder
 popup** on app open when a backup is due. Configurable in Settings (on/off, interval, change
 threshold, live status, preview). Plus a "delete all data" action with double confirmation.
+The backup carries every category, account, rule, preset and transaction plus every setting
+the user configured (budgets, trips, subscriptions, layout, privacy, export file naming…);
+only device bookkeeping (last backup, install date, linked file, snapshots) stays behind.
+
+**First launch:** 9 standard categories, Checking + Cash, and ~40 generic keyword rules for
+common Italian chains and services (supermarkets, delivery, trains, telcos, utilities,
+streaming). Nothing personal, and no two default rules match the same text.
 
 **Home / Lock Screen quick-add:** a `?action=add` deep link opens the app straight into a new
 transaction. Settings explains the two setup paths clearly: **Home Screen** (add the link to
@@ -1522,3 +1529,30 @@ confirmation `buddy UniCredit conferma op.Internet 49,00 EUR carta *0000 c/o PAY
 
 `applyBankSync` is now tested directly (fake DB, real function): re-importing after an edit,
 bank-before-Wallet and Wallet-before-bank, and the real log imported twice (the €49 shows up once).
+
+### Chapter 53 — Defaults for anyone, and a restore that stays restored (2026-10-12)
+Two questions — "what does a new user see on day one?" and "is everything in my backup?" —
+turned up three problems.
+
+- **A restore brought deleted things back.** The personal starter rules (Chapter 9) and the
+  `ANTHROPIC` example were added by *one-time* blocks in `DB.init()`, each guarded by a meta flag
+  (`starterRulesSeeded`, `regexRulesSeeded`). The backup doesn't carry those flags and a restore
+  wipes meta, so on the next launch both blocks ran again: any default category you had deleted
+  or renamed (University food, Software, Dining…) and every starter rule you had removed came
+  back. Both blocks are gone; defaults now live only in `seed()`, which runs on an empty
+  database and nowhere else.
+- **Day one was someone else's phone.** A fresh install got "University food" and ~30 rules for
+  one person's Florence canteens, bars, and health providers. The seed is now the 9 standard
+  categories and ~40 generic rules (ESSELUNGA, CONAD, DELIVEROO, TRENITALIA, VODAFONE, NETFLIX…).
+  Rules are read back in random-id order, so the old "earlier rules win" comment was never true
+  after a reload; the new set is built so **no two rules match the same text**. Short words are
+  word-bounded regexes, because plain substrings misfire: `BAR` caught BARCLAYS, `ALDI`
+  GARIBALDI, `ENEL` PENELOPE, `ATM ` cash withdrawals, and `FLIX` (meant for FlixBus) NETFLIX.
+- **Export file naming** (dated vs fixed) was a hand-made setting the backup silently dropped.
+  It's in the backup and in merge now.
+
+**Existing installs are untouched.** The removed blocks only ever *added* data and have already
+run everywhere they were going to; nothing deletes or rewrites stored rules or categories.
+`tests/seed.test.js` runs the real `db.js` on a fake IndexedDB that survives between launches:
+fresh install, a months-old install (byte-identical after launch), and restore → relaunch
+(nothing comes back). Run against the previous commit, it fails on exactly those points.

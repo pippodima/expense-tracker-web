@@ -5860,7 +5860,8 @@
         subscriptions: m.subscriptions || null,
         blocks: m.blocks || null,
         withdrawalSettings: m.withdrawalSettings || null,
-        privacy: m.privacy || null
+        privacy: m.privacy || null,
+        exportNaming: m.exportNaming || null
       }
     };
   }
@@ -6282,7 +6283,8 @@
         keywords: m.budgetSkip.keywords || []
       });
     }
-    for (const k of ['trips', 'tripSettings', 'subscriptions', 'blocks', 'withdrawalSettings']) {
+    for (const k of ['trips', 'tripSettings', 'subscriptions', 'blocks', 'withdrawalSettings',
+      'exportNaming']) {
       if (m[k] && !DB.state.meta[k]) await DB.setMeta(k, m[k]);
     }
     if (m.bankAccountMap) {

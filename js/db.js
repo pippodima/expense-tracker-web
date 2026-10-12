@@ -97,54 +97,10 @@ const DB = (() => {
     }
     // Baseline for the "it's been N days" backup reminder.
     if (!state.meta.installedAt) await setMeta('installedAt', Date.now());
-    // One-time: example regex rules for bank-import categorization.
-    if (!state.meta.regexRulesSeeded && state.categories.length) {
-      let software = state.categories.find((c) => /^software$/i.test(c.name));
-      if (!software) {
-        software = { id: U.uid(), name: 'Software', icon: '💻', color: 'violet' };
-        await put('categories', software);
-      }
-      if (!state.rules.some((r) => /anthropic/i.test(r.keyword || ''))) {
-        await put('rules', { id: U.uid(), keyword: 'ANTHROPIC', regex: true, categoryId: software.id });
-      }
-      await setMeta('regexRulesSeeded', 1);
-    }
-    // One-time: starter keyword rules for common Italian/buddybank merchants.
-    if (!state.meta.starterRulesSeeded && state.categories.length) {
-      const ensureCat = async (name, icon, color) => {
-        let c = state.categories.find((x) => x.name.toLowerCase() === name.toLowerCase());
-        if (!c) c = await put('categories', { id: U.uid(), name, icon, color });
-        return c;
-      };
-      const uni = await ensureCat('University food', '🍝', 'yellow');
-      const dining = await ensureCat('Dining', '🍕', 'orange');
-      const groceries = await ensureCat('Groceries', '🛒', 'green');
-      const transport = await ensureCat('Transport', '🚌', 'blue');
-      const bills = await ensureCat('Bills', '💡', 'yellow');
-      const software2 = await ensureCat('Software', '💻', 'violet');
-      const health = await ensureCat('Health', '💊', 'red');
-      const shopping = await ensureCat('Shopping', '🛍️', 'magenta');
-      const entertainment = await ensureCat('Entertainment', '🎬', 'violet');
-      // Order matters: earlier rules win, so university-specific before generic "BAR".
-      const starter = [
-        ['MENSA', uni], ['CIR UNIV', uni], ['ITACA', uni], ['FACOLTA', uni],
-        ['CAPONNETTO', uni], ['CALAMANDREI', uni], ['S.APOLLONIA', uni],
-        ['CAMINITOS', dining], ['SUMUP', dining], ['PIZZERIA', dining], ['OSTERIA', dining],
-        ['RIFRULLO', dining], ['HABANA', dining], ['NINKASI', dining], ['BAR', dining],
-        ['UNICOOP', groceries], ['PAM', groceries],
-        ['AUTOLINEE', transport], ['FLIX', transport], ['ITABUS', transport], ['TCL', transport],
-        ['ILIAD', bills], ['APPLE.COM', bills], ['COMUNE DI FIRENZE', bills],
-        ['MICROSOFT', software2], ['CLAUDE', software2],
-        ['PHARMACIE', health], ['PIODA IMAGING', health], ['SERENIS', health],
-        ['INTIMISSIMI', shopping], ['YURPLAN', entertainment]
-      ];
-      for (const [keyword, cat] of starter) {
-        if (!state.rules.some((r) => (r.keyword || '').toUpperCase() === keyword.toUpperCase())) {
-          await put('rules', { id: U.uid(), keyword, categoryId: cat.id });
-        }
-      }
-      await setMeta('starterRulesSeeded', 1);
-    }
+    /* Defaults belong in seed() alone, never in a "one-time" block keyed on a meta flag:
+       restoring a backup wipes meta, so such a block runs again on the next launch and
+       brings back categories and rules the user had deleted. The old `regexRulesSeeded` /
+       `starterRulesSeeded` flags may still sit in meta on older installs; nothing reads them. */
     // Best effort: ask the browser not to evict our data.
     if (navigator.storage && navigator.storage.persist) {
       navigator.storage.persist().catch(() => {});
@@ -261,19 +217,26 @@ const DB = (() => {
       { id: U.uid(), name: 'Cash', type: 'cash', startingBalance: 0 }
     ];
     const byName = (n) => cats.find((c) => c.name === n).id;
-    const rules = [
-      { id: U.uid(), keyword: 'ESSELUNGA', categoryId: byName('Groceries') },
-      { id: U.uid(), keyword: 'COOP', categoryId: byName('Groceries') },
-      { id: U.uid(), keyword: 'CONAD', categoryId: byName('Groceries') },
-      { id: U.uid(), keyword: 'LIDL', categoryId: byName('Groceries') },
-      { id: U.uid(), keyword: 'CARREFOUR', categoryId: byName('Groceries') },
-      { id: U.uid(), keyword: 'AMAZON', categoryId: byName('Shopping') },
-      { id: U.uid(), keyword: 'TRENITALIA', categoryId: byName('Transport') },
-      { id: U.uid(), keyword: 'ATM ', categoryId: byName('Transport') },
-      { id: U.uid(), keyword: 'FARMACIA', categoryId: byName('Health') },
-      { id: U.uid(), keyword: 'NETFLIX', categoryId: byName('Entertainment') },
-      { id: U.uid(), keyword: 'STIPENDIO', categoryId: byName('Salary') }
+    /* Common chains and services, nothing tied to one person or city. Rules are read
+       back in id order (random), not in this order, so no two of these may match the
+       same text. Short or ambiguous words are regexes with word boundaries: plain
+       "BAR" would catch BARCLAYS, "ALDI" GARIBALDI, and "ATM" cash withdrawals. */
+    const defaults = [
+      ['Groceries', 'ESSELUNGA', 'CONAD', 'LIDL', 'CARREFOUR', 'EUROSPIN', 'DESPAR',
+        'PENNY MARKET', /\b(ALDI|(UNI)?COOP)\b/],
+      ['Dining', /\b(BAR|CAFFE|PIZZERIA|RISTORANTE|TRATTORIA|OSTERIA|SUSHI)\b/, 'MCDONALD',
+        'BURGER KING', 'DELIVEROO', 'JUST EAT', 'GLOVO', 'UBER EATS'],
+      ['Transport', 'TRENITALIA', 'FLIXBUS', 'RYANAIR', 'EASYJET', 'TELEPASS', /\bITALO/,
+        /\bUBER\b(?!.*EATS)/],
+      ['Shopping', 'AMAZON', 'ZALANDO', 'IKEA', 'DECATHLON'],
+      ['Bills', 'VODAFONE', 'WINDTRE', 'ILIAD', 'FASTWEB', /\b(ENEL|TIM|A2A|HERA|IREN)\b/],
+      ['Health', 'FARMACIA', 'PHARMACY'],
+      ['Entertainment', 'NETFLIX', 'SPOTIFY', 'DISNEY', 'DAZN', 'CINEMA'],
+      ['Salary', 'STIPENDIO']
     ];
+    const rules = defaults.flatMap(([cat, ...keys]) => keys.map((k) => (k instanceof RegExp
+      ? { id: U.uid(), keyword: k.source, regex: true, categoryId: byName(cat) }
+      : { id: U.uid(), keyword: k, categoryId: byName(cat) })));
     await bulkPut('categories', cats);
     await bulkPut('accounts', accounts);
     await bulkPut('rules', rules);
