@@ -57,7 +57,7 @@ Static files, loaded in order by `index.html`:
 | `js/util.js` | Formatting (EUR it-IT, dates), ids, the validated color palette, DOM helpers, toast, file download |
 | `js/db.js` | Storage layer — IndexedDB with transparent in-memory fallback; domain helpers (balances, category suggestion, duplicate keys) |
 | `js/csv.js` | CSV parsing (quotes, auto delimiter), bank date/amount parsing, CSV serialization |
-| `js/wallet.js` | Parser for the Wallet notification log (`Titolo/Sottotitolo/Corpo/Data` blocks) → transactions with stable ids, one account per card |
+| `js/wallet.js` | Parser for the notification log (`Titolo/Sottotitolo/Corpo/Data` blocks, Wallet + buddybank app) → transactions with stable ids, one account per card, Wallet/bank duplicates merged |
 | `js/charts.js` | Hand-built SVG charts: donut, single bars, grouped bars, net line |
 | `js/app.js` | Everything else: views, navigation, forms/sheets, budget, stats, CSV import wizard, backup + reminders |
 | `sw.js` | Service worker — precache app shell, cache-first, offline fallback |
@@ -156,6 +156,13 @@ duplicated. Unmatched descriptions land in **Uncategorized** and a **review queu
 banner + Settings), where assigning a category can also create a rule (substring or **regex**)
 that immediately sweeps the rest of the queue. (The earlier GoCardless PSD2 API path was
 removed in Chapter 21 — this converter is the workflow actually in use.)
+
+**Notification log import (Wallet + buddybank app):** an iOS automation appends Wallet and
+buddybank app notifications to one text file; Home's ↻ button (or Settings → Import transactions)
+re-reads the whole file. Only payments are imported: Wallet amounts and the bank's `conferma op.`
+confirmations; stamps, card messages and 3-D Secure approval requests are skipped and counted.
+A payment seen by both Wallet and the bank app becomes one transaction. If you change an
+imported transaction's date, amount or type, later imports keep your values.
 
 ---
 
@@ -1485,3 +1492,33 @@ correctly, so `12.5 €` is turned away instead of being misread as €125. The 
 the account lookup, so a pass can never create an account. Skipped blocks are counted in the
 import summary ("1 notification that wasn't a payment skipped"). If Apple ever changes the
 payment format, that number is how we'll notice.
+
+### Chapter 52 — The bank app's notifications, and edits that stick (2026-10-12)
+Some payments never reach Wallet. Online and PayPal charges only show up in the buddybank app, so
+the automation now logs that app's notifications too. The first one in the log was a €49 PayPal
+payment, written **three times**: the 3-D Secure request `Autorizza pagamento e-commerce di
+49,00EUR…` twice (once with the title "Pagamento e-commerce", once with no title), then the
+confirmation `buddy UniCredit conferma op.Internet 49,00 EUR carta *0000 c/o PAYPAL *… 11/10/26
+22:43`. The "only an amount" filter from Chapter 51 rejected all three, so the payment was lost.
+
+- **Only the confirmation counts.** An approval request can still be declined, so it's skipped
+  like a stamp card. The confirmation is read for its amount, merchant (`c/o …`) and its **own
+  timestamp**, which is when the card was actually charged. The name in front of "UniCredit"
+  ("buddy") picks the account, the same one as the card's Wallet notifications. A confirmation
+  logged twice is one payment.
+- **Wallet + bank = one transaction.** When both notified, they're paired if the card and amount
+  match and Wallet's time falls between 15 minutes before and two days after the bank's. Closest
+  pairs go first, so two equal coffees on two mornings each pair with their own day. The row keeps
+  Wallet's clean merchant and place and the bank's date, and it carries **both ids**
+  (`externalId` + `altIds`). The import finds it by either one, so it doesn't matter which
+  notification was logged first or whether the file was imported in between. This also fixes the
+  "Not done yet" from Chapter 50 for the notification log.
+- **Your edits stick.** An offline payment notifies late, sometimes the next day, so the import
+  put it on the wrong date. Fixing that by hand used to be undone by the next import, because
+  imported date/amount/type always won. Now, saving an imported transaction with a changed
+  date, amount or type marks it `userEdited`, and later imports leave those fields alone.
+  Unedited rows are still corrected: when a bank confirmation turns up for a late Wallet row,
+  the row moves to the real date.
+
+`applyBankSync` is now tested directly (fake DB, real function): re-importing after an edit,
+bank-before-Wallet and Wallet-before-bank, and the real log imported twice (the €49 shows up once).

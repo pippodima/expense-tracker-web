@@ -4294,6 +4294,12 @@
             draft.amount = Math.round(val * 100) / 100;
             delete draft.origAmount; delete draft.origCurrency; delete draft.rate;
           }
+          // An imported row whose date/amount/type you changed keeps your values on
+          // every later import (see applyBankSync).
+          if (existing && existing.externalId && (draft.date !== existing.date ||
+              draft.amount !== existing.amount || draft.type !== existing.type)) {
+            draft.userEdited = true;
+          }
           await DB.put('transactions', draft);
           if (draft.categoryId) await rememberCategoryPick(draft.categoryId);
           await bumpChanges(1);
@@ -5367,7 +5373,7 @@
   }
 
   async function handleWalletText(text) {
-    const { rows, foreign, broken, ignored } = Wallet.parse(text);
+    const { rows, foreign, broken, ignored, merged } = Wallet.parse(text);
     if (!rows.length) {
       return toast(foreign ? 'Only foreign-currency payments in this file'
         : 'No Wallet payments found in this file');
@@ -5385,7 +5391,12 @@
     if (broken) notes.push(broken + ' incomplete notification' + (broken === 1 ? '' : 's') + ' ignored.');
     if (ignored) {
       notes.push(ignored + ' notification' + (ignored === 1 ? '' : 's') +
-        ' that ' + (ignored === 1 ? "wasn't a payment" : "weren't payments") + ' skipped (stamps, passes…).');
+        ' that ' + (ignored === 1 ? "wasn't a payment" : "weren't payments") +
+        ' skipped (stamps, passes, payment approval requests…).');
+    }
+    if (merged) {
+      notes.push(merged + ' repeat notification' + (merged === 1 ? '' : 's') +
+        ' for a payment already counted (Wallet + bank app) merged into one.');
     }
     await DB.setMeta('walletImportedAt', Date.now());
     await applyBankSync({ kind: 'bank-sync', title: 'Wallet payments imported',
@@ -5490,10 +5501,15 @@
       if (!r.externalId || !r.date || !isFinite(Number(r.amount)) || amount === 0 ||
           !map[r.accountUuid]) { skipped++; continue; }
       const type = Number(r.amount) < 0 ? 'expense' : 'income';
-      const existing = byExternal.get(r.externalId);
+      // A row merged from two notifications is known by either id (see js/wallet.js).
+      const ids = [r.externalId].concat(r.altIds || []);
+      const existing = ids.map((id) => byExternal.get(id)).find(Boolean);
       if (existing) {
-        // Bank data wins for date/amount/type; the user's category/note edits survive.
-        if (existing.date !== r.date || existing.amount !== amount || existing.type !== type) {
+        ids.forEach((id) => byExternal.set(id, existing));
+        // Bank data wins for date/amount/type, unless you changed one of those yourself
+        // (a late notification's date, say); category/note edits always survive.
+        if (!existing.userEdited &&
+            (existing.date !== r.date || existing.amount !== amount || existing.type !== type)) {
           toPut.push({ ...existing, date: r.date, amount, type });
           updated++;
         } else unchanged++;
@@ -5524,7 +5540,7 @@
           }
         }
         toPut.push(kept);
-        byExternal.set(r.externalId, adopt);
+        ids.forEach((id) => byExternal.set(id, adopt));
         merged++;
         continue;
       }
@@ -5536,7 +5552,7 @@
       };
       if (!cat) tx.needsReview = true;
       toPut.push(tx);
-      byExternal.set(r.externalId, tx);
+      ids.forEach((id) => byExternal.set(id, tx));
       added++;
     }
     if (toPut.length) await DB.bulkPut('transactions', toPut);
