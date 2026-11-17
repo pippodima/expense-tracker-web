@@ -163,12 +163,12 @@ function openAssignSheet(t, onDone) {
     };
     drawChips();
 
-    // Suggest a rule pattern from the description's most distinctive word.
-    const guess = (t.note || '').split(/\s+/)
-      .filter((w) => w.length >= 4 && !/^\d+$/.test(w))[0] || (t.note || '').slice(0, 12);
+    // Suggest the description itself, exactly as written. Shorten it here when it
+    // carries parts that change every time (dates, card digits), or it won't match again.
+    const guess = (t.note || '').trim();
     const ruleToggle = el('input', { type: 'checkbox' });
     ruleToggle.checked = !!guess;
-    const pattern = el('input', { type: 'text', value: guess.toUpperCase(), autocapitalize: 'characters' });
+    const pattern = el('input', { type: 'text', value: guess, autocapitalize: 'characters' });
     const regexToggle = el('input', { type: 'checkbox' });
 
     body.append(

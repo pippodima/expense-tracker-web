@@ -49,11 +49,13 @@ const GUARDED = ['renderDashboard', 'budgetCard', 'budgetStatus', 'tripBudgetSta
   'openCategoryPickSheet', 'openCategorySheet', 'emojiPicker', 'lastGrapheme',
   'setupCard', 'setupSteps', 'maybeShowSwipeHint',
   'tripTotals', 'tripBookedAhead', 'tripTagged', 'openTripAttachSheet',
-  'handleWalletText', 'walletAccountMap', 'applyBankSync'];
+  'handleWalletText', 'walletAccountMap', 'applyBankSync',
+  'enableDragClose', 'typingIn', 'lowerKeyboard', 'openAssignSheet'];
 /* Not guardable here: regex literals (catEmojiFor) read as identifiers because the
    checker strips strings but not regexes, and destructured parameters (makeSwipeable's
-   { onTap, onEdit, onDelete }) aren't seen as declarations. Those get covered by
-   their own tests instead. */
+   { onTap, onEdit, onDelete }) aren't seen as declarations, and method shorthand
+   (openSheet's `close() {`) reads as a call. Those get covered by their own tests
+   instead (openSheet: sheets.test.js). */
 if (!run([path.join(__dirname, 'scope-check.js'), ...GUARDED], 'scope')) failed++;
 
 for (const f of fs.readdirSync(__dirname).filter((n) => n.endsWith('.test.js')).sort()) {

@@ -37,22 +37,51 @@ function openSheet(title, build, opts) {
     }
   };
   head.querySelector('button').addEventListener('click', api.close);
-  backdrop.addEventListener('click', api.close);
+  /* With the keyboard up, the backdrop is most of what's still visible above the
+     sheet, so tapping it is how people lower the keyboard. That tap must not throw
+     away a half-filled form: it lowers the keyboard, and the next tap closes. Whether
+     you were typing is read on touch-down, before the browser can move focus. */
+  let typingAtTouch = false;
+  backdrop.addEventListener('pointerdown', () => { typingAtTouch = !!typingIn(sheet); });
+  backdrop.addEventListener('click', () => {
+    if (typingAtTouch || typingIn(sheet)) { lowerKeyboard(sheet); typingAtTouch = false; return; }
+    api.close();
+  });
   enableDragClose(sheet, backdrop, body, [grip, head], api.close);
   build(body, api);
   return api;
 }
 
+/* The field inside `sheet` that has the keyboard up, or null. Checkboxes, buttons
+   and the like take focus too but bring up no keyboard, so they don't count. */
+const NO_KEYBOARD = ['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file'];
+function typingIn(sheet) {
+  const a = document.activeElement;
+  if (!a || a === document.body || !sheet.contains(a)) return null;
+  if (a.tagName === 'TEXTAREA' || a.isContentEditable) return a;
+  if (a.tagName === 'INPUT' && !NO_KEYBOARD.includes(a.type)) return a;
+  return null;
+}
+
+function lowerKeyboard(sheet) {
+  const a = typingIn(sheet);
+  if (a) a.blur();
+}
+
 /* Drag a sheet downward to dismiss it. A drag starts only from the grip/header,
-   or from the body when it's scrolled to the top — so inner scrolling still works. */
+   or from the body when it's scrolled to the top — so inner scrolling still works.
+   While you're typing, a downward swipe is how you push the keyboard away; it
+   lowers the keyboard and leaves the sheet — and what you typed — where it is. */
 function enableDragClose(sheet, backdrop, body, handles, close) {
   let startY = 0, startX = 0, curDy = 0, dragging = false, decided = false, fromHandle = false;
+  let typing = false;
 
   sheet.addEventListener('touchstart', (e) => {
     const t = e.touches[0];
     startY = t.clientY; startX = t.clientX; curDy = 0;
     dragging = false; decided = false;
     fromHandle = handles.some((h) => h.contains(e.target));
+    typing = !!typingIn(sheet);
   }, { passive: true });
 
   sheet.addEventListener('touchmove', (e) => {
@@ -61,8 +90,9 @@ function enableDragClose(sheet, backdrop, body, handles, close) {
     if (!decided) {
       if (Math.abs(dy) < 6 && Math.abs(dx) < 6) return;
       decided = true;
-      dragging = dy > 0 && Math.abs(dy) > Math.abs(dx) &&
-        (fromHandle || body.scrollTop <= 0);
+      const downward = dy > 0 && Math.abs(dy) > Math.abs(dx);
+      if (downward && typing) { lowerKeyboard(sheet); return; }
+      dragging = downward && (fromHandle || body.scrollTop <= 0);
     }
     if (!dragging) return;
     curDy = Math.max(0, dy);

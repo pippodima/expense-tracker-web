@@ -1598,3 +1598,26 @@ and the app reloads itself (Chapter 39's update logic). With more files to preca
 reload landed later, so a scripted restore raced it and the backup reminder snoozed itself on a
 page that was being replaced. The app was fine; the harness now waits for the worker to take
 control before seeding.
+
+### Chapter 55 — Lowering the keyboard lost the form (2026-11-17)
+Two things from using the app on the phone.
+
+- **Pushing the keyboard away threw the sheet away.** Fill in a new transaction, type the
+  description last, lower the keyboard to reach Add, and the whole sheet was gone. An iPhone
+  web app has no "hide keyboard" key, so people lower it by swiping down or by tapping above
+  the sheet. Both were already gestures for closing the sheet: drag-to-dismiss and a tap on the
+  backdrop, which is most of what you can still see while the keyboard is up. Now, **while a text field in the sheet has focus, either gesture only lowers the
+  keyboard**. The next one closes as before, and Close always closes. Whether you were typing is
+  read on touch-down, before the browser has a chance to move focus. Checkboxes and buttons take
+  focus without a keyboard, so they don't count. This lives in the shared sheet code, so every
+  sheet gets it.
+- **The rule suggested in the review queue is the whole description now**, exactly as written,
+  instead of its first word of 4+ letters in capitals. It's still an editable field: shorten it
+  when the description carries parts that change every time (dates, card digits), or the rule
+  won't match the next one.
+
+`tests/sheets.test.js` runs the real sheet code on a fake DOM: swipe and tap while typing,
+after the keyboard is down, never typed, sideways and upward swipes, a focused checkbox, and
+the suggested rule. The sheet fix was also checked in headless Chromium with emulated touch on
+the real "New transaction" sheet: swipe down while typing keeps the sheet and the amount, and the
+second swipe closes it; same for taps above the sheet. Cache `v57`.
