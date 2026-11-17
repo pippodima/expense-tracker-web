@@ -27,3 +27,5 @@ test.json
 
 # Generated demo dataset for screenshots (rebuild with: node tools/demo-data.js)
 tools/demo-backup.json
+data_test_add
+convert.py
