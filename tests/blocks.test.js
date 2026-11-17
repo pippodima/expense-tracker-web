@@ -4,7 +4,7 @@ const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
-const src = fs.readFileSync(ROOT + '/js/app.js', 'utf8');
+const src = require('./app-source').src;
 
 function slice(startIdx) {
   let depth = 0;

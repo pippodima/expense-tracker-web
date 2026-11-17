@@ -1,11 +1,11 @@
 /* Importing a file that carries its own category column: which names match what's
    already here, which are new, and what the new ones look like. Runs the real
-   catKey / catEmojiFor / planImportCategories from js/app.js. */
+   catKey / catEmojiFor / planImportCategories from js/app/. */
 const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
-const src = fs.readFileSync(ROOT + '/js/app.js', 'utf8');
+const src = require('./app-source').src;
 
 function slice(startIdx) {
   let depth = 0;

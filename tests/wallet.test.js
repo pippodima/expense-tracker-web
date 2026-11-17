@@ -1,5 +1,5 @@
 /* Wallet notification log: the real Wallet.parse from js/wallet.js on the shapes the
-   phone writes, and the real walletAccountMap from js/app.js deciding which account
+   phone writes, and the real walletAccountMap from js/app/ deciding which account
    each card lands in. */
 const fs = require('fs');
 const vm = require('vm');
@@ -137,8 +137,8 @@ ok('equal amounts on two days pair with their own day', coffees.rows.length === 
 ok('different amount never pairs', Wallet.parse(conf('4,60', 'BAR ROMA', '12/10/26', '23:50') + '\n' + lateWallet).rows.length === 2);
 ok('three days apart never pairs', Wallet.parse(conf('4,50', 'BAR ROMA', '09/10/26', '23:50') + '\n' + lateWallet).rows.length === 2);
 
-/* ---- Pull a top-level function out of js/app.js ---- */
-const src = fs.readFileSync(ROOT + '/js/app.js', 'utf8');
+/* ---- Pull a top-level function out of js/app/ ---- */
+const src = require('./app-source').src;
 const extract = (sig) => {
   const s = src.indexOf(sig);
   let depth = 0;

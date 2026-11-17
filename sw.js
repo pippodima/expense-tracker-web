@@ -1,6 +1,6 @@
 /* Service worker: network-first for our own files (so updates always reach the
    device when online), cache fallback so the app still works fully offline. */
-const CACHE = 'expense-tracker-v55';
+const CACHE = 'expense-tracker-v56';
 const ASSETS = [
   './',
   './index.html',
@@ -12,7 +12,37 @@ const ASSETS = [
   './js/csv.js',
   './js/detect.js',
   './js/wallet.js',
-  './js/app.js',
+  // js/app/: every <script> in index.html must be listed (tests/run.js checks)
+  './js/app/core/state.js',
+  './js/app/core/navigation.js',
+  './js/app/core/sheets.js',
+  './js/app/core/icons.js',
+  './js/app/core/blocks.js',
+  './js/app/privacy.js',
+  './js/app/onboarding.js',
+  './js/app/budget.js',
+  './js/app/trips.js',
+  './js/app/categories.js',
+  './js/app/merchants.js',
+  './js/app/subscriptions.js',
+  './js/app/views/dashboard.js',
+  './js/app/views/search.js',
+  './js/app/views/stats.js',
+  './js/app/views/stats-trends.js',
+  './js/app/views/stats-calendar.js',
+  './js/app/views/stats-places.js',
+  './js/app/views/transactions.js',
+  './js/app/views/tx-sheet.js',
+  './js/app/views/accounts.js',
+  './js/app/views/settings.js',
+  './js/app/data/reminders.js',
+  './js/app/data/autosave.js',
+  './js/app/data/encryption.js',
+  './js/app/data/backup.js',
+  './js/app/data/statement-import.js',
+  './js/app/data/review.js',
+  './js/app/data/csv-wizard.js',
+  './js/app/boot.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/apple-touch-icon.png'

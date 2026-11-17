@@ -59,7 +59,7 @@ Static files, loaded in order by `index.html`:
 | `js/csv.js` | CSV parsing (quotes, auto delimiter), bank date/amount parsing, CSV serialization |
 | `js/wallet.js` | Parser for the notification log (`Titolo/Sottotitolo/Corpo/Data` blocks, Wallet + buddybank app) → transactions with stable ids, one account per card, Wallet/bank duplicates merged |
 | `js/charts.js` | Hand-built SVG charts: donut, single bars, grouped bars, net line |
-| `js/app.js` | Everything else: views, navigation, forms/sheets, budget, stats, CSV import wizard, backup + reminders |
+| `js/app/` | Everything else, one feature per file (Chapter 54): `core/` (state, navigation, sheets, icons, blocks), the money model (`budget`, `trips`, `categories`, `merchants`, `subscriptions`), `privacy`, `onboarding`, `views/` (one per screen), `data/` (backup, autosave, encryption, reminders, statement import, review, CSV wizard), and `boot.js` last |
 | `sw.js` | Service worker — precache app shell, cache-first, offline fallback |
 | `manifest.webmanifest` | PWA manifest (standalone, icons, `?action=add` shortcut) |
 | `icons/` | Generated € app icons (180 / 192 / 512) |
@@ -69,7 +69,7 @@ Static files, loaded in order by `index.html`:
 | `README.md`, `LICENSE` | Public-facing description of the project; MIT |
 
 There is **no framework**. State lives in `DB.state` (the source of truth, mirrored to
-IndexedDB) plus a small `ui` object in `app.js` for view/filter state. The service worker
+IndexedDB) plus a small `ui` object in `js/app/core/state.js` for view/filter state. The service worker
 cache is versioned (`expense-tracker-v5` at time of writing) and bumped on every release so
 installed copies pick up changes.
 
@@ -1556,3 +1556,45 @@ run everywhere they were going to; nothing deletes or rewrites stored rules or c
 `tests/seed.test.js` runs the real `db.js` on a fake IndexedDB that survives between launches:
 fresh install, a months-old install (byte-identical after launch), and restore → relaunch
 (nothing comes back). Run against the previous commit, it fails on exactly those points.
+
+### Chapter 54 — One file became thirty (2026-11-17)
+Goal: make the code easier to find and edit, **without changing a single behaviour**.
+`js/app.js` had grown to ~7,070 lines inside one closure, so every change meant scrolling
+through Home, Stats, trips, backups and the CSV wizard at once.
+
+Shipped:
+- `js/app.js` is now `js/app/`, 30 files cut along the section banners the code already had:
+  `core/` (state, navigation, sheets, icons, blocks), the money model (`budget`, `trips`,
+  `categories`, `merchants`, `subscriptions`), `privacy`, `onboarding`, `views/` (one file per
+  screen), `data/` (backup, autosave, encryption, reminders, statement import, review, CSV
+  wizard) and `boot.js`. A few helpers that had drifted into the wrong section moved next to
+  their callers: trip accounting into `trips.js`, category sheets and pickers into
+  `categories.js`, `repairData` into `data/backup.js`, and `refreshToday` into `core/state.js`.
+- **Plain scripts, not ES modules.** Top-level declarations in classic scripts share one global
+  scope, so the code needed no rewriting: same lines, two spaces less indent. Modules would have
+  meant hundreds of hand-written imports, plus setters for shared mutable state (`now`,
+  `fileHandle`, …), which is a lot of risk for a refactor that promised no change. The cost:
+  load order matters for anything that runs at load time. So nothing does except declarations,
+  and work starts in `boot()` on `DOMContentLoaded`.
+- The cut was done by a script, not by hand. It refused to run unless every cut fell between
+  top-level statements, and it checked that every one of the 6,632 code lines came out exactly
+  once.
+- Tests: `tests/app-source.js` reads the script list from `index.html`, so the suite extracts
+  functions from the same text the browser runs. New `load-order.test.js` loads all scripts
+  into one context in page order. It fails on a name declared twice, on a file that uses
+  another's code at load time, and on a script missing from `sw.js`. Each of those was
+  mutation-tested.
+- Cache `v56`, because every script path changed.
+
+How we know nothing changed: the old commit and the new tree ran side by side in headless
+Chromium on the same demo data. The walk-through covered 22 steps: every tab and Stats
+sub-view, the trip, category, search, arrange, account, add and edit sheets, private mode, all
+Settings sections open, and an edit saved to the database. The rendered DOM and the stored data
+were identical at every step. The only difference was the version label (`v55` → `v56`), and
+neither version logged an error.
+
+One lesson from the comparison. On a first visit the service worker installs, claims the page
+and the app reloads itself (Chapter 39's update logic). With more files to precache, that
+reload landed later, so a scripted restore raced it and the backup reminder snoozed itself on a
+page that was being replaced. The app was fine; the harness now waits for the worker to take
+control before seeding.

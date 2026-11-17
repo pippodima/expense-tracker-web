@@ -95,7 +95,7 @@ shape of "unusual versus its own history" logic, just keyed differently.
 but **zero transactions and no budget**. Home therefore reads `0,00 €` three times, a donut
 emoji and "No expenses this period". Nothing hints that the app can import a bank file, that
 rows swipe to edit, or that trips, private mode and Lock Screen quick-add exist. There is no
-onboarding code anywhere in `app.js`.
+onboarding code anywhere in the app.
 
 Candidate shapes, roughly in order of how much they'd help:
 

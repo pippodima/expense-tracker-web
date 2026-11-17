@@ -4,7 +4,7 @@ const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
-const src = fs.readFileSync(ROOT + '/js/app.js', 'utf8');
+const src = require('./app-source').src;
 
 const baseCtx = vm.createContext({ console, Intl, Date, Math, Number, String, Array,
   Object, JSON, setTimeout, clearTimeout, isFinite, crypto: { randomUUID: () => 'x' },

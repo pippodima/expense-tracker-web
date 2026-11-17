@@ -70,6 +70,38 @@
   <script src="js/detect.js"></script>
   <script src="js/wallet.js"></script>
   <script src="js/charts.js"></script>
-  <script src="js/app.js"></script>
+
+  <!-- The app, one feature per file. Plain scripts sharing one global scope: order only
+       matters for boot.js, which must come last. New files go here AND in sw.js. -->
+  <script src="js/app/core/state.js"></script>
+  <script src="js/app/core/navigation.js"></script>
+  <script src="js/app/core/sheets.js"></script>
+  <script src="js/app/core/icons.js"></script>
+  <script src="js/app/core/blocks.js"></script>
+  <script src="js/app/privacy.js"></script>
+  <script src="js/app/onboarding.js"></script>
+  <script src="js/app/budget.js"></script>
+  <script src="js/app/trips.js"></script>
+  <script src="js/app/categories.js"></script>
+  <script src="js/app/merchants.js"></script>
+  <script src="js/app/subscriptions.js"></script>
+  <script src="js/app/views/dashboard.js"></script>
+  <script src="js/app/views/search.js"></script>
+  <script src="js/app/views/stats.js"></script>
+  <script src="js/app/views/stats-trends.js"></script>
+  <script src="js/app/views/stats-calendar.js"></script>
+  <script src="js/app/views/stats-places.js"></script>
+  <script src="js/app/views/transactions.js"></script>
+  <script src="js/app/views/tx-sheet.js"></script>
+  <script src="js/app/views/accounts.js"></script>
+  <script src="js/app/views/settings.js"></script>
+  <script src="js/app/data/reminders.js"></script>
+  <script src="js/app/data/autosave.js"></script>
+  <script src="js/app/data/encryption.js"></script>
+  <script src="js/app/data/backup.js"></script>
+  <script src="js/app/data/statement-import.js"></script>
+  <script src="js/app/data/review.js"></script>
+  <script src="js/app/data/csv-wizard.js"></script>
+  <script src="js/app/boot.js"></script>
 </body>
 </html>

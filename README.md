@@ -153,7 +153,8 @@ It now launches full-screen and works offline. There is nothing to build or conf
 | [`js/csv.js`](js/csv.js) | CSV parsing and serialization, bank date/amount parsing |
 | [`js/detect.js`](js/detect.js) | The universal importer: format, delimiter, column and direction detection |
 | [`js/charts.js`](js/charts.js) | Hand-built SVG charts — donut, bars, stacked bars, multi-line, sparkline |
-| [`js/app.js`](js/app.js) | Views, navigation, sheets, budgets, trips, stats, import wizard, backups |
+| [`js/wallet.js`](js/wallet.js) | Parser for the Wallet / bank-app notification log → transactions with stable ids |
+| [`js/app/`](js/app/) | The app itself, one feature per file — see below |
 | [`sw.js`](sw.js) | Service worker — network-first for our own files, cache fallback for offline |
 | [`manifest.webmanifest`](manifest.webmanifest) | PWA manifest (standalone, icons, `?action=add` shortcut) |
 | [`sync/`](sync/) | Optional statement converter that runs on the phone — not part of the app runtime |
@@ -163,9 +164,25 @@ It now launches full-screen and works offline. There is nothing to build or conf
 | [`IDEAS.md`](IDEAS.md) | The other half: what might be built, what's still open, what was rejected and why |
 
 There is no framework and no global state library. `DB.state` is the source of truth, mirrored
-to IndexedDB; a small `ui` object in `app.js` holds view and filter state. Data records —
-transactions, accounts, categories, rules, presets and a `meta` key/value store — all carry a
-stable `id`.
+to IndexedDB; a small `ui` object in [`js/app/core/state.js`](js/app/core/state.js) holds view
+and filter state. Data records — transactions, accounts, categories, rules, presets and a `meta`
+key/value store — all carry a stable `id`.
+
+### Inside `js/app/`
+
+| Path | What it does |
+|------|--------------|
+| `core/` | Shared plumbing: UI `state`, `navigation` (tabs, re-render, period helpers), bottom `sheets`, emoji `icons`, rearrangeable `blocks` |
+| `budget.js` · `trips.js` · `categories.js` · `merchants.js` · `subscriptions.js` | The money model: allowance and limits, trips and their currency, categories and rules, place grouping, the subscription radar |
+| `privacy.js` · `onboarding.js` | Private mode; the getting-started checklist |
+| `views/` | One file per screen: `dashboard`, `search`, `stats` (+ `stats-trends`, `stats-calendar`, `stats-places`), `transactions`, `tx-sheet`, `accounts`, `settings` |
+| `data/` | Getting data in and out: `backup`, `autosave`, `encryption`, `reminders`, `statement-import`, `review`, `csv-wizard` |
+| `boot.js` | Startup — loads last |
+
+They're plain `<script>`s, not ES modules: no build step, and their top-level declarations
+share one global scope, so any file can call any other. The rules that keep that safe are at
+the top of [`core/state.js`](js/app/core/state.js). In short, nothing runs at load time (work
+starts in `boot()`), and a new file goes in both `index.html` and `sw.js`. The tests check both.
 
 ---
 
@@ -182,8 +199,9 @@ because each catches what the previous one can't:
 2. **scope-check** — identifiers that resolve to nothing at runtime. A `const` referenced from
    the wrong function is a `ReferenceError` that `node --check` accepts happily; that exact
    mistake once shipped a half-rendered add-transaction sheet.
-3. **`*.test.js`** — the real functions, extracted from `js/app.js` and run against a fake DOM
+3. **`*.test.js`** — the real functions, extracted from `js/app/` and run against a fake DOM
    with pinned dates, covering budget maths, trip charts and the block layout engine.
+   `load-order.test.js` loads every script together, in page order, as the browser does.
 
 CI runs the same command on every push.
 
@@ -228,7 +246,7 @@ It's a personal project, but issues and pull requests are welcome. Two things to
 1. **The constraints are the product.** No network calls from the app, no dependencies, no
    build step, no backend. If a change needs any of those, it belongs somewhere else.
 2. Run `node tests/run.js` before opening a PR, bump the cache version in `sw.js` if you touch
-   a cached file, and add a chapter to [`PROJECT_DIARY.md`](PROJECT_DIARY.md) — the diary is
+   a cached file (and list any new script there and in `index.html`), and add a chapter to [`PROJECT_DIARY.md`](PROJECT_DIARY.md) — the diary is
    how this project remembers *why*.
 
 ---

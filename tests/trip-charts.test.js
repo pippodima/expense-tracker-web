@@ -1,10 +1,10 @@
-/* Renders the real tripCharts (extracted from js/app.js) against a fake DOM,
+/* Renders the real tripCharts (extracted from js/app/) against a fake DOM,
    with every requestAnimationFrame callback forced so the charts actually draw. */
 const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
-const src = fs.readFileSync(ROOT + '/js/app.js', 'utf8');
+const src = require('./app-source').src;
 
 /* ---------- fake DOM ---------- */
 function node(tag) {

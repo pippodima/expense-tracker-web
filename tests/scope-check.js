@@ -1,10 +1,10 @@
 /* Scope check — the class of bug `node --check` cannot see (Chapter 28).
    For each named function, every identifier it reads must be declared inside it,
-   declared at module level in app.js, or be a known global. */
+   declared at top level in js/app/, or be a known global. */
 const fs = require('fs');
 const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
-const src = fs.readFileSync(ROOT + '/js/app.js', 'utf8');
+const src = require('./app-source').src;
 
 const strip = (s) => s
   .replace(/\/\*[\s\S]*?\*\//g, ' ')

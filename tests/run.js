@@ -9,13 +9,13 @@
                              ReferenceError that `node --check` accepts happily;
                              that exact mistake once shipped a half-rendered
                              add-transaction sheet (see PROJECT_DIARY Chapter 28).
-     3. *.test.js          — the real functions, extracted from js/app.js and run
-                             against a fake DOM with pinned dates. */
+     3. *.test.js          — the real functions, extracted from js/app/ and run
+                             against a fake DOM with pinned dates. load-order.test.js
+                             loads every script together, as the browser does. */
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-
-const ROOT = path.resolve(__dirname, '..');
+const { ROOT, scripts } = require('./app-source');
 const run = (args, label) => {
   process.stdout.write('\n\x1b[1m' + label + '\x1b[0m\n');
   try {
@@ -31,7 +31,7 @@ const run = (args, label) => {
 
 let failed = 0;
 
-for (const f of ['js/util.js', 'js/db.js', 'js/csv.js', 'js/detect.js', 'js/wallet.js', 'js/charts.js', 'js/app.js']) {
+for (const f of scripts) {                      // every <script> in index.html
   try { execFileSync(process.execPath, ['--check', f], { cwd: ROOT }); }
   catch (e) { console.error('syntax error in ' + f); failed++; }
 }

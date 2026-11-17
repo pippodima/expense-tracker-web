@@ -1,5 +1,5 @@
 /* Reproduction: does a back-dated expense move the daily budget?
-   Runs the REAL budgetStatus / tripBudgetStatus / countsInBudget from app.js. */
+   Runs the REAL budgetStatus / tripBudgetStatus / countsInBudget from js/app/. */
 const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
@@ -14,7 +14,7 @@ const baseCtx = vm.createContext({ console, Intl, Date, Math, Number, String, Ar
 vm.runInContext(fs.readFileSync(ROOT + '/js/util.js', 'utf8') + '\nglobalThis.U = U;', baseCtx);
 const realU = baseCtx.U;
 
-const src = fs.readFileSync(ROOT + '/js/app.js', 'utf8');
+const src = require('./app-source').src;
 function extract(name) {
   const start = src.indexOf('function ' + name + '(');
   if (start < 0) throw new Error('not found: ' + name);

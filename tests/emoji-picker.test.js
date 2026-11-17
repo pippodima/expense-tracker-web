@@ -1,12 +1,12 @@
 /* Any emoji can be a category icon, which means splitting text into grapheme
    clusters rather than characters: a family emoji is four codepoints joined by
    ZWJ, a flag is two regional indicators, a thumbs-up may carry a skin tone.
-   Runs the real graphemes / lastGrapheme from js/app.js. */
+   Runs the real graphemes / lastGrapheme from js/app/. */
 const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
-const src = fs.readFileSync(ROOT + '/js/app.js', 'utf8');
+const src = require('./app-source').src;
 
 function extract(name) {
   const start = src.indexOf('function ' + name + '(');

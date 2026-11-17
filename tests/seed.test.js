@@ -192,7 +192,7 @@ const PERSONAL = ['MENSA', 'CIR UNIV', 'ITACA', 'FACOLTA', 'CAPONNETTO', 'CALAMA
 
   /* ---- The backup carries export naming ---- */
   console.log('backup payload');
-  const src = fs.readFileSync(ROOT + '/js/app.js', 'utf8');
+  const src = require('./app-source').src;
   const start = src.indexOf('function buildBackupPayload(');
   let depth = 0, end = -1;
   for (let j = src.indexOf('{', start); j < src.length; j++) {
